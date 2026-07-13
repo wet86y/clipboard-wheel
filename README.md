@@ -1,8 +1,18 @@
 # 超级中键
 
-Windows 轻量绿色小工具——按住鼠标中键呼出轮盘，方向选择剪切板历史，松开粘贴。
+## Windows 剪贴板轮盘工具
 
 ![超级中键轮盘](assets/wheel-overview.png)
+
+你是否厌倦了在多个窗口之间反复复制、粘贴和寻找历史内容？
+
+超级中键是一款面向 Windows 的剪贴板轮盘工具。按住鼠标中键即可呼出轮盘，从最近复制的内容中快速选择，松开鼠标后直接粘贴到当前窗口。
+
+本项目代码0%人工编写，纯ai构筑。
+
+运行环境：一个坚固标中键（Windows 10/11 64位，无其他依赖）
+
+## 开源许可
 
 主项目采用 [Apache License 2.0](LICENSE)。共享更新组件
 `shared/DesktopUpdateKit` 作为 Git submodule 接入并采用 MIT License；完整归属说明见
