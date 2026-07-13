@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>超级中键</AssemblyName>
+    <RootNamespace>ClipboardWheel</RootNamespace>
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+    <Product>超级中键</Product>
+    <Description>中键剪贴板轮盘与突破动作轮盘</Description>
+    <DesktopUpdateKitRoot>$(MSBuildThisFileDirectory)..\..\shared\DesktopUpdateKit</DesktopUpdateKitRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Resources\app.ico" />
+    <EmbeddedResource Include="$(UpdaterStubPath)"
+                      LogicalName="DesktopUpdateKit.Resources.UpdaterStub.exe"
+                      Condition="'$(UpdaterStubPath)' != '' and Exists('$(UpdaterStubPath)')" />
+    <Compile Include="$(DesktopUpdateKitRoot)\src\DesktopUpdateKit\*.cs"
+             Link="Services\DesktopUpdateKit\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <Target Name="EnsureDesktopUpdateKitSubmodule" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(DesktopUpdateKitRoot)\src\DesktopUpdateKit\UpdateClient.cs')"
+           Text="DesktopUpdateKit submodule is missing. Run: git submodule update --init --recursive" />
+  </Target>
+
+  <PropertyGroup>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <!--
+    Keep diagnostics explicit instead of inferring the build kind from
+    Assembly.Location.  A normal build keeps PasteTrace for local diagnosis;
+    the release script passes PasteTraceEnabled=false for the distributed exe.
+  -->
+  <PropertyGroup>
+    <PasteTraceEnabled Condition="'$(PasteTraceEnabled)' == ''">true</PasteTraceEnabled>
+    <PasteTraceNextToExecutable Condition="'$(PasteTraceNextToExecutable)' == ''">false</PasteTraceNextToExecutable>
+    <DefineConstants Condition="'$(PasteTraceEnabled)' == 'true'">$(DefineConstants);PASTE_TRACE_ENABLED</DefineConstants>
+    <DefineConstants Condition="'$(PasteTraceNextToExecutable)' == 'true'">$(DefineConstants);PASTE_TRACE_NEXT_TO_EXECUTABLE</DefineConstants>
+  </PropertyGroup>
+
+  <!--
+    Both UseWPF and UseWindowsForms are enabled (WinForms is required for
+    the tray NotifyIcon). The implicit global usings therefore expose
+    System.Windows.* and System.Windows.Forms.* side by side, which makes
+    unqualified WPF type names (Point, Brush, Application, DataObject,
+    IDataObject, ComboBox) ambiguous. Force WPF semantics project-wide;
+    TrayService.cs keeps its file-level "Forms" alias for the few WinForms
+    types it actually needs.
+  -->
+  <ItemGroup>
+    <Using Include="System.Windows.Point" Alias="Point" />
+    <Using Include="System.Windows.Size" Alias="Size" />
+    <Using Include="System.Windows.Media.Brush" Alias="Brush" />
+    <Using Include="System.Windows.Media.Brushes" Alias="Brushes" />
+    <Using Include="System.Windows.Media.Color" Alias="Color" />
+    <Using Include="System.Windows.Media.ColorConverter" Alias="ColorConverter" />
+    <Using Include="System.Windows.Application" Alias="Application" />
+    <!-- Clipboard is intentionally NOT pinned globally: ClipboardHistoryService /
+         PasteService need System.Windows.Clipboard while WindowsClipboardHistoryService
+         needs Windows.ApplicationModel.DataTransfer.Clipboard. Each file declares
+         its own using alias. -->
+    <Using Include="System.Windows.DataFormats" Alias="DataFormats" />
+    <Using Include="System.Windows.DataObject" Alias="DataObject" />
+    <Using Include="System.Windows.IDataObject" Alias="IDataObject" />
+    <Using Include="System.Windows.Controls.ComboBox" Alias="ComboBox" />
+    <Using Include="System.Windows.Controls.RadioButton" Alias="RadioButton" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,71 @@
+{
+  "settingsVersion": 3,
+  "isFirstRun": true,
+  "wheel": {
+    "shape": "circle",
+    "_shape_doc": "circle | rectangle。Tiers: circle {4,6,8}, rectangle {4,8}. 切到圆形默认 6 扇，切到矩形默认 8 扇。",
+    "sectorCount": 6,
+    "radius": 180,
+    "_radius_doc": "轮盘大小（圆=半径，矩=半边长）。主控控件，联动自动计算预览字符数。",
+    "innerDeadZoneRadius": 42,
+    "_innerDeadZoneRadius_doc": "中心死区。矩形和圆形共享，矩形 3x3 中心格也填此颜色。",
+    "_sectorGapPixels_doc": "已写死=8，设置 UI 不再显示。矩形格子间隔 px。",
+    "sectorGapPixels": 4.0,
+    "_selectedSectorScale_doc": "已写死=1.04，设置 UI 不再显示。选中扇区动画缩放倍数。",
+    "selectedSectorScale": 1.08,
+    "opacity": 0.88,
+    "showAtCursor": true,
+    "animationEnabled": true,
+    "_maxPreviewChars_doc": "已废弃，由轮盘大小和扇区数量自动计算。程序忽略此值。",
+    "maxPreviewChars": 32,
+    "quickCopy": true,
+    "_quickCopy_doc": "启用后最后一个扇区变为 Ctrl+C 复制按钮（绿色）。固定位置，不受剪切板条目数量影响。"
+  },
+  "theme": {
+    "backgroundColor": "#202020",
+    "sectorColor": "#2D2D2D",
+    "sectorHoverColor": "#3F6AFF",
+    "sectorBorderColor": "#666666",
+    "textColor": "#FFFFFF",
+    "mutedTextColor": "#BBBBBB",
+    "centerColor": "#111111"
+  },
+  "mouse": {
+    "defaultCaptureMode": "always",
+    "triggerButton": "middle",
+    "longPressThresholdMs": 120,
+    "suppressOriginalMiddleClick": true,
+    "cancelWhenReleaseInDeadZone": true
+  },
+  "clipboard": {
+    "maxHistoryItems": 8,
+    "_maxHistoryItems_doc": "固定=8，覆盖全部轮盘场景；设置 UI 不再显示。",
+    "loadWindowsClipboardHistoryOnStartup": true,
+    "_loadWindowsClipboardHistoryOnStartup_doc": "固定=true，启动时自动导入一次 Win+V 历史；运行期仍由本程序监听剪切板。",
+    "capturePlainText": true,
+    "captureHtml": true,
+    "captureRtf": true,
+    "captureCsv": true,
+    "_capture_doc": "文本/富文本固定全量捕获：纯文本、HTML/表格、RTF、CSV/TSV 都保留。",
+    "captureImages": false,
+    "_captureImages_doc": "默认=false。打开后实时捕获剪贴板图片，轮盘里显示缩略图；启动 Win+V 导入暂不读取历史图片。",
+    "ignorePasswordLikeText": false,
+    "_ignorePasswordLikeText_doc": "固定=false。本地小工具诚实记录剪切板内容，不再猜测过滤密码/token。"
+  },
+  "paste": {
+    "defaultMode": "smart",
+    "_defaultMode_doc": "固定=smart。单格文本走纯文本；表格/富文本保留可用格式。",
+    "_restoreClipboardAfterPaste_doc": "固定=false，避免与 Excel/WPS 慢读的竞态。详见 docs/DESIGN_NOTES.md §7。",
+    "restoreClipboardAfterPaste": false,
+    "restoreDelayMs": 150,
+    "_addPasteToClipboardHistory_doc": "固定=false。wheel 粘贴尽量不加 Win+V 历史，但 Windows/WPF 链路只能 best-effort。详见 docs/DESIGN_NOTES.md §6。",
+    "addPasteToClipboardHistory": false,
+    "_modifierMode_doc": "已废弃。Ctrl/Shift 不再改变粘贴模式，保留字段仅为回退兼容。",
+    "ctrlModifierMode": "plainText",
+    "shiftModifierMode": "formatted"
+  },
+  "processRules": {
+    "_doc": "应用黑白名单已停用；中键轮盘是否启用完全由托盘图标/菜单控制。",
+    "default": "always"
+  }
+}

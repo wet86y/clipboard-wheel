@@ -1,67 +1,104 @@
 # 超级中键
 
-## Windows 剪贴板轮盘工具
+Windows 轻量绿色小工具——按住鼠标中键呼出轮盘，方向选择剪切板历史，松开粘贴。
 
 ![超级中键轮盘](assets/wheel-overview.png)
 
-你是否厌倦了在多个窗口之间反复复制、粘贴和寻找历史内容？
+主项目采用 [Apache License 2.0](LICENSE)。共享更新组件
+`shared/DesktopUpdateKit` 作为 Git submodule 接入并采用 MIT License；完整归属说明见
+[NOTICE](NOTICE) 和 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
-超级中键是一款面向 Windows 的剪贴板轮盘工具。按住鼠标中键即可呼出轮盘，从最近复制的内容中快速选择，松开鼠标后直接粘贴到当前窗口。
+## 功能
 
-本项目代码0人工编写，纯ai构筑。
+| 功能 | 说明 |
+|------|------|
+| 中键轮盘 | 按住中键显示圆形/矩形轮盘，鼠标方向选择，松开粘贴；无历史时也可唤起空轮盘；轮盘激活期间拦截滚轮误触，避免 PPT 等应用翻页 |
+| 突破轮盘 | 圆形模式下突破外缘可唤出外圈动作槽，支持快捷键和 `.lnk` 快捷方式；未配置槽位不参与选中并回落到内圈选择 |
+| 剪贴板历史 | 启动后台读取 Win+V 历史补底，运行期自己监听并置顶，维护最近 8 条 |
+| 多格式 | 文本 / HTML / RTF / CSV / TSV，Excel 表格粘贴保留格式 |
+| 图片支持 | 可选捕获剪贴板图片，轮盘使用缩略图预览，粘贴保留原图（设置中开启） |
+| Quick Copy | 最后一个扇区固定为 Ctrl+C 复制按钮 |
+| 临时锁定 | 轮盘选中历史扇区后右键切换锁定，当前运行期内不被新剪贴板顶走 |
+| 托盘 | 左键切换捕获开关，右键菜单（设置/清空/退出），双色图标；设置窗口保持单例 |
+| 绿色免装 | 单 exe 运行，设置写入 `%AppData%\超级中键\settings.json` |
+| 单实例 | 启动时自动检测并阻止重复运行 |
 
-运行环境：一个坚固标中键（Windows 10/11 64位，无其他依赖）
-
-## 核心功能
-
-基础轮盘：按住鼠标中键呼出轮盘，使用 Windows 原生剪贴板接口保存最近复制的文本、表格和图片内容；按方向选择后松开鼠标即可粘贴，右键可临时锁定历史扇区。
+基础轮盘与突破动作演示：
 
 ![基础轮盘演示](assets/basic-wheel.gif)
 
-基础轮盘演示
-
-突破轮盘：从指定方向继续向外拖动，可进入突破扇区，触发预先配置的快捷键或应用快捷方式，适合快速打开常用工具和动作。
-
 ![突破轮盘与快捷动作演示](assets/extended-wheel.gif)
 
-突破轮盘与快捷动作演示
+## 下载
 
-## 其他功能
+普通用户可从 [GitHub Releases](https://github.com/wet86y/clipboard-wheel/releases/latest)
+下载最新稳定版。程序为绿色免安装单 EXE；当前尚未使用 Windows 代码签名证书，请仅从
+本仓库 Release 获取，并保留随发布资产提供的许可证与第三方声明。
 
-- 开机自启与管理员模式：可按需配置开机启动；在某些目标程序以管理员权限运行时，可开启管理员模式兼容选项。
-- 托盘控制：左键点击托盘图标可启用或停用轮盘捕获，右键可打开设置、清空历史或退出程序。
-- 个性化设置：可调整轮盘形状、扇区数量、轮盘大小、中心死区、透明度和图片捕获开关。
-- 突破轮盘设置浏览器时可直接输入目标网址，启动时直达网页。
-- 程序内更新：从 GitHub Releases 获取版本信息，支持应用内下载、暂停、继续、节点切换、SHA-256 校验和失败回滚。
+## 构建
 
-## 如何使用
+项目只维护 Release 源码路径；调试运行版和打包发布版都从同一套 Release 配置产出。
 
-1. 从 GitHub Release 下载最新版本。
-2. 双击“超级中键.exe/super-middle-key.exe”运行，程序会驻留在 Windows 托盘区域。
-3. 复制文本、表格或图片后，按住鼠标中键呼出轮盘。
-4. 将鼠标移动到目标扇区，松开中键即可粘贴。
-5. 首次使用可通过托盘右键菜单打开设置，调整轮盘形状、扇区和兼容选项。
+源码位于 `src\ClipboardWheel`，共享更新组件位于 `shared\DesktopUpdateKit`，脚本位于
+`scripts`，构建生成物统一位于 `build`，正式发布包位于 `artifacts`。首次克隆必须初始化
+子模块：
 
-## 下载与更新
+```powershell
+git clone --recurse-submodules https://github.com/wet86y/clipboard-wheel.git
+```
 
-最新版本：[https://github.com/wet86y/clipboard-wheel/releases/latest](https://github.com/wet86y/clipboard-wheel/releases/latest)
+已有工作区可执行 `git submodule update --init --recursive`。项目不依赖固定磁盘路径或
+当前工作目录，移动时应保留完整仓库结构。
 
-程序采用绿色免安装分发，更新在应用内完成。下载完成后会校验文件大小和 SHA-256，校验通过后才允许安装。
+| 版本 | 命令 | 产物位置 | 用途 |
+|------|------|----------|------|
+| 调试运行版 | `dotnet build .\src\ClipboardWheel\ClipboardWheel.csproj -c Release /p:PasteTraceNextToExecutable=true` | `build\bin\Release\超级中键.exe` | 本地测试；日志写在程序同级目录 |
+| 打包发布版 | `scripts\build-release.ps1` | `artifacts\超级中键-win-x64\超级中键.exe` | 自包含单文件，不写日志，分发用 |
 
-加速节点只负责传输 EXE，版本清单和 SHA-256 文件仍从 GitHub 官方地址获取。
+维护时只认定上述两个输出目录：调试运行版的 `build\bin\Release` 与正式包的 `artifacts\超级中键-win-x64`。不得创建或维护 `artifacts\超级中键-debug-win-x64` 等额外调试分发目录，也不得手工修改 `build/` 或 `artifacts/` 内的编译产物。
 
-## 安全与隐私提示
+调试运行版写同级 `paste-trace.log`（粘贴链路毫秒级事件日志）；打包发布版由脚本显式关闭日志，不生成 `paste-trace.log`。
 
-- 剪贴板历史默认保存在本机运行内存中；应用设置写入 %AppData%\\超级中键\\settings.json。
-- 程序不会将剪贴板文本、表格或图片上传给开发者服务器。检查更新时只会访问 GitHub 及用户启用的下载节点。
-- 使用第三方加速节点时，节点可能看到请求来源 IP 和下载请求；对网络隐私敏感时，可关闭加速节点并使用 GitHub 官方直连。
-- 当前版本未使用 Windows 代码签名证书。Windows SmartScreen 或安全软件可能显示未识别发布者提示，请仅从项目 GitHub Release 获取程序，并核对 SHA-256。
-- 管理员模式会触发 Windows UAC 权限请求，仅在确有需要时开启。
+## 项目文档
 
-## 版权与许可
+- `docs/BRANCH_PROJECT.md`：分支项目目标、边界、维护纪律和合入条件。
+- `docs/EXTENDED_WHEEL_DESIGN.md`：突破轮盘功能拓展设计草案。
+- `docs/RELEASE_CHECKLIST.md`：打包发布前的代码、编译、手测和提交检查清单。
+- `docs/BUILD_OUTPUT_CONTRACT.md`：调试运行版与正式打包版的唯一维护路径和产物约束。
+- `docs/用户使用说明.md`：给普通使用者阅读的简明说明。
+- `docs/ACCEPTANCE_TESTS.md`：完整人工验收清单。
+- `docs/DESIGN_NOTES.md`：关键设计决策和历史取舍。
+- `docs/IMPLEMENTATION_GUIDE.md`：实现结构和维护入口。
+- `docs/SHARED_UPDATE_ARCHITECTURE.md`：本项目如何通过 Git submodule 接入 `DesktopUpdateKit`。
 
-Copyright © 2026 wet86y. All rights reserved.
+## 托盘操作
 
-本项目当前未声明开源许可证。除作者明确授权外，不应将程序、文档、演示素材或重新打包后的版本视为可自由修改和再分发内容。
+- **左键单击**：切换中键捕获 开/关。图标即时变化（蓝色圆 = 开启，灰色圆 = 关闭）
+- **右键单击**：弹出菜单（启用/禁用轮盘、设置、清空历史、退出）
+- **设置入口**：只通过右键菜单的“设置”打开；重复点击只会激活已有设置窗口，不会创建多个。
 
-本项目代码使用 AI 辅助生成；AI 辅助不代表对第三方依赖、系统环境或特定目标程序行为提供绝对保证。
+## 设置要点
+
+| 设置 | 说明 |
+|------|------|
+| 快捷复制 | 最后一个扇区固定为复制按钮（深绿色），选中即 Ctrl+C |
+| 扇区锁定 | 轮盘打开时选中历史扇区并右键，蓝灰色表示锁定；再次右键解除。Quick Copy 扇区不可锁定；切换形状/扇区数后会按当前可见历史槽位归一化 |
+| 图片捕获 | 默认关闭；打开后实时捕获剪贴板图片，轮盘中显示缩略图 |
+| 形状/扇区 | 圆形 4/6/8（切换默认 6），矩形 4/8（切换默认 8） |
+| 轮盘大小/死区/透明度 | 单页设置窗口直接调整，保存后即时写入 settings.json |
+
+粘贴模式固定为 Smart：单格文本走纯文本，表格 HTML 走格式化；含 `<table>` 的合并单元格自动识别。文本/富文本剪贴板捕获固定为全格式，图片捕获由设置开关单独控制，历史固定 8 条；中键轮盘是否启用由托盘图标/菜单控制。Ctrl/Shift 修饰键不再改变粘贴模式。
+
+## 诊断
+
+调试运行版使用 `dotnet build .\src\ClipboardWheel\ClipboardWheel.csproj -c Release /p:PasteTraceNextToExecutable=true`，每次粘贴会在 `build\bin\Release\paste-trace.log` 写入诊断记录。
+打包发布版通过 `scripts/build-release.ps1` 打包。
+
+提交前可运行 `scripts\run-self-check.ps1`，它会构建调试版并检查日志门控和剪贴板监听基础约束。
+
+```bash
+# 查看最后 200 条
+Get-Content .\build\bin\Release\paste-trace.log -Tail 200
+# 只看最后一次 paste
+Select-String "PasteAsync_end" .\build\bin\Release\paste-trace.log | Select-Object -Last 1
+```

@@ -1,0 +1,41 @@
+{
+  "applicationId": "clipboard-wheel",
+  "repository": "wet86y/clipboard-wheel",
+  "publishedExeName": "\u8d85\u7ea7\u4e2d\u952e.exe",
+  "releaseAssetName": "super-middle-key.exe",
+  "projectFile": "src/ClipboardWheel/ClipboardWheel.csproj",
+  "artifactsDirectory": "artifacts/\u8d85\u7ea7\u4e2d\u952e-win-x64",
+  "runtimeIdentifier": "win-x64",
+  "enableSingleFileCompression": true,
+  "about": {
+    "displayName": "超级中键",
+    "developer": "wet86y",
+    "historyUrl": "https://github.com/wet86y/clipboard-wheel"
+  },
+  "downloadNodes": [
+    {
+      "id": "gh-proxy",
+      "template": "https://gh-proxy.com/{url}",
+      "priority": 10,
+      "enabled": true
+    },
+    {
+      "id": "gh-llkk",
+      "template": "https://gh.llkk.cc/{url}",
+      "priority": 20,
+      "enabled": true
+    },
+    {
+      "id": "ghproxy-net",
+      "template": "https://ghproxy.net/{url}",
+      "priority": 30,
+      "enabled": true
+    },
+    {
+      "id": "github-direct",
+      "template": "{url}",
+      "priority": 1000,
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+[submodule "shared/DesktopUpdateKit"]
+	path = shared/DesktopUpdateKit
+	url = https://github.com/wet86y/DesktopUpdateKit.git
