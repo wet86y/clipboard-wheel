@@ -39,7 +39,7 @@ internal static class ElevationService
         {
             return runAsAdministrator
                 ? TryStartElevated(executablePath, out error)
-                : TryStartUnelevated(executablePath, out error);
+                : TryStartUnelevated(executablePath, new[] { "--admin-restart" }, out error);
         }
         catch (Win32Exception exception)
         {
@@ -47,6 +47,30 @@ internal static class ElevationService
                 ? "已取消管理员权限请求。"
                 : exception.Message;
             return false;
+        }
+        catch (Exception exception)
+        {
+            error = exception.Message;
+            return false;
+        }
+    }
+
+    public static bool TryStartUnelevatedProcess(
+        IReadOnlyList<string> arguments,
+        out string? error)
+    {
+        error = null;
+        if (Environment.ProcessPath is not { Length: > 0 } executablePath
+            || !Path.IsPathFullyQualified(executablePath)
+            || !File.Exists(executablePath))
+        {
+            error = "当前运行方式不支持启动普通权限辅助进程。";
+            return false;
+        }
+
+        try
+        {
+            return TryStartUnelevated(executablePath, arguments, out error);
         }
         catch (Exception exception)
         {
@@ -75,7 +99,10 @@ internal static class ElevationService
         return true;
     }
 
-    private static bool TryStartUnelevated(string executablePath, out string? error)
+    private static bool TryStartUnelevated(
+        string executablePath,
+        IReadOnlyList<string> arguments,
+        out string? error)
     {
         error = null;
         var sessionId = Process.GetCurrentProcess().SessionId;
@@ -122,7 +149,13 @@ internal static class ElevationService
                     {
                         cb = Marshal.SizeOf<StartupInfo>()
                     };
-                    var commandLine = new StringBuilder($"\"{executablePath.Replace("\"", "\\\"")}\" --admin-restart");
+                    var commandLine = new StringBuilder($"\"{executablePath.Replace("\"", "\\\"")}\"");
+                    foreach (var argument in arguments)
+                    {
+                        commandLine.Append(" \"");
+                        commandLine.Append(argument.Replace("\"", "\\\""));
+                        commandLine.Append('"');
+                    }
                     var workingDirectory = Path.GetDirectoryName(executablePath) ?? string.Empty;
                     var started = CreateProcessAsUser(
                         primaryToken,

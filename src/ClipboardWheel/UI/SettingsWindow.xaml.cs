@@ -50,6 +50,7 @@ public partial class SettingsWindow : Window
     private static readonly UpdateClient SharedUpdateClient = new(UpdateOptions);
     private static readonly UpdateDownloadSession SharedUpdateSession = new(SharedUpdateClient);
     private readonly UpdateLauncher _updateLauncher = new();
+    private CancellationTokenSource? _shortcutDropHelperCancellation;
 
     public SettingsWindow(SettingsService settingsService)
     {
@@ -523,7 +524,9 @@ public partial class SettingsWindow : Window
         {
             SlotActionButton.Content = string.IsNullOrWhiteSpace(slot.ShortcutPath) ? "选择" : "清除";
             SlotValueText.Text = string.IsNullOrWhiteSpace(slot.ShortcutPath)
-                ? "拖入 .lnk 快捷方式"
+                ? ElevationService.IsAdministrator()
+                    ? "点击打开普通权限拖放窗口，或点“选择”"
+                    : "拖入 .lnk 快捷方式"
                 : System.IO.Path.GetFileNameWithoutExtension(slot.ShortcutPath);
             SlotValuePanel.AllowDrop = string.IsNullOrWhiteSpace(slot.ShortcutPath);
             ShortcutIconImage.Source = LoadShortcutIcon(slot.ShortcutPath);
@@ -624,15 +627,22 @@ public partial class SettingsWindow : Window
     private void ShortcutDrop_Drop(object sender, WpfDragEventArgs e)
     {
         var slot = _settings.Wheel.ExtendedWheel.Slots[_selectedExtendedSlotIndex];
+        PasteTrace.Mark(
+            $"ShortcutDrop_wpf_received slot={_selectedExtendedSlotIndex} " +
+            $"configured={!string.IsNullOrWhiteSpace(slot.ShortcutPath)}");
         if (!string.Equals(GetComboTag(SlotModeBox, ExtendedWheelActionMode.Hotkey), ExtendedWheelActionMode.Shortcut, StringComparison.OrdinalIgnoreCase)
             || !string.IsNullOrWhiteSpace(slot.ShortcutPath)
             || !TryGetShortcutDropPath(e, out var path))
         {
+            PasteTrace.Mark($"ShortcutDrop_wpf_rejected slot={_selectedExtendedSlotIndex}");
             e.Handled = true;
             return;
         }
 
         slot.ShortcutPath = path;
+        PasteTrace.Mark(
+            $"ShortcutDrop_wpf_accepted slot={_selectedExtendedSlotIndex} " +
+            $"file={System.IO.Path.GetFileName(path)}");
         SaveExtendedSlotFromUi();
         UpdateSlotEditor();
         DrawExtendedWheelPreview();
@@ -1082,12 +1092,145 @@ public partial class SettingsWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _shortcutDropHelperCancellation?.Cancel();
+        _shortcutDropHelperCancellation = null;
         SharedUpdateSession.Changed -= SharedUpdateSession_Changed;
         SharedUpdateSession.PauseWhenUiCloses();
         base.OnClosed(e);
     }
 
     public static void StopUpdateDownloadForApplicationExit() => SharedUpdateSession.Dispose();
+
+    private async void ShortcutDropPanel_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!ElevationService.IsAdministrator())
+        {
+            return;
+        }
+
+        var slot = _settings.Wheel.ExtendedWheel.Slots[_selectedExtendedSlotIndex];
+        if (!string.Equals(
+                GetComboTag(SlotModeBox, ExtendedWheelActionMode.Hotkey),
+                ExtendedWheelActionMode.Shortcut,
+                StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(slot.ShortcutPath))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        if (_shortcutDropHelperCancellation is not null)
+        {
+            SlotValueText.Text = "拖放窗口已打开，请把 .lnk 拖入该窗口";
+            return;
+        }
+
+        await RunShortcutDropHelperAsync();
+    }
+
+    private async Task RunShortcutDropHelperAsync()
+    {
+        var handoffId = Guid.NewGuid().ToString("N");
+        var handoffPath = ShortcutDropHandoff.GetResultPath(handoffId);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        _shortcutDropHelperCancellation = cancellation;
+
+        try
+        {
+            if (!ElevationService.TryStartUnelevatedProcess(
+                    new[] { "--shortcut-drop-helper", handoffId },
+                    out var startError))
+            {
+                PasteTrace.Mark($"ShortcutDrop_helper_start_failed error={startError}");
+                WpfMessageBox.Show(
+                    this,
+                    startError ?? "无法启动普通权限拖放窗口。",
+                    "超级中键",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
+            PasteTrace.Mark($"ShortcutDrop_helper_started slot={_selectedExtendedSlotIndex}");
+            SlotValueText.Text = "请把 .lnk 拖入已打开的普通权限窗口";
+            while (!System.IO.File.Exists(handoffPath))
+            {
+                await Task.Delay(100, cancellation.Token);
+            }
+
+            var shortcutPath = await System.IO.File.ReadAllTextAsync(
+                handoffPath,
+                cancellation.Token);
+            if (!TryApplyShortcutPath(shortcutPath, out var rejectionReason))
+            {
+                PasteTrace.Mark(
+                    $"ShortcutDrop_helper_rejected slot={_selectedExtendedSlotIndex} " +
+                    $"reason={rejectionReason}");
+                return;
+            }
+
+            PasteTrace.Mark(
+                $"ShortcutDrop_helper_accepted slot={_selectedExtendedSlotIndex} " +
+                $"file={System.IO.Path.GetFileName(shortcutPath)}");
+        }
+        catch (OperationCanceledException)
+        {
+            PasteTrace.Mark("ShortcutDrop_helper_cancelled");
+        }
+        catch (Exception exception)
+        {
+            PasteTrace.Mark(
+                $"ShortcutDrop_helper_exception {exception.GetType().Name}: {exception.Message}");
+        }
+        finally
+        {
+            ShortcutDropHandoff.TryDelete(handoffPath);
+            if (ReferenceEquals(_shortcutDropHelperCancellation, cancellation))
+            {
+                _shortcutDropHelperCancellation = null;
+            }
+
+            if (IsLoaded)
+            {
+                UpdateSlotEditor();
+            }
+        }
+    }
+
+    private bool TryApplyShortcutPath(string? shortcutPath, out string rejectionReason)
+    {
+        rejectionReason = string.Empty;
+        var slot = _settings.Wheel.ExtendedWheel.Slots[_selectedExtendedSlotIndex];
+        if (!string.Equals(
+                GetComboTag(SlotModeBox, ExtendedWheelActionMode.Hotkey),
+                ExtendedWheelActionMode.Shortcut,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            rejectionReason = "not_shortcut_mode";
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(slot.ShortcutPath))
+        {
+            rejectionReason = "slot_already_configured";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(shortcutPath)
+            || !System.IO.File.Exists(shortcutPath)
+            || !string.Equals(System.IO.Path.GetExtension(shortcutPath), ".lnk", StringComparison.OrdinalIgnoreCase))
+        {
+            rejectionReason = "invalid_lnk_path";
+            return false;
+        }
+
+        slot.ShortcutPath = shortcutPath;
+        SaveExtendedSlotFromUi();
+        UpdateSlotEditor();
+        DrawExtendedWheelPreview();
+        rejectionReason = "accepted";
+        return true;
+    }
 
     private void ChooseShortcutFile(ExtendedWheelActionSlot slot)
     {

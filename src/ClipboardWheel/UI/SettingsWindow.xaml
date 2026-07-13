@@ -217,7 +217,8 @@
                                             Padding="10"
                                             AllowDrop="True"
                                             DragOver="ShortcutDrop_DragOver"
-                                            Drop="ShortcutDrop_Drop">
+                                            Drop="ShortcutDrop_Drop"
+                                            MouseLeftButtonUp="ShortcutDropPanel_MouseLeftButtonUp">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />

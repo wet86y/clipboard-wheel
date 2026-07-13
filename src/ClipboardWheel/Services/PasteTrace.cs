@@ -25,13 +25,13 @@ internal static class PasteTrace
     public static string? LogPath => _logPath;
 
     [Conditional("PASTE_TRACE_ENABLED")]
-    public static void Init()
+    public static void Init(string fileName = "paste-trace.log")
     {
         try
         {
             var dir = GetLogDirectory();
             Directory.CreateDirectory(dir);
-            _logPath = Path.Combine(dir, "paste-trace.log");
+            _logPath = Path.Combine(dir, Path.GetFileName(fileName));
 
             // Append across sessions; a "session start" line separates runs.
             var stream = new FileStream(

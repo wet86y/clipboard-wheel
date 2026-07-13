@@ -1,4 +1,5 @@
 using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
@@ -12,6 +13,9 @@ public partial class App : Application
 {
     private const string SingleInstanceMutexName = @"Local\SuperMiddleKey.SingleInstance";
     private const string AdministratorRestartArgument = "--admin-restart";
+    private const string ShortcutDropHelperArgument = "--shortcut-drop-helper";
+    private const string VerifyReleaseArgument = "--verify-release";
+    private const string UpdaterStubResourceName = "DesktopUpdateKit.Resources.UpdaterStub.exe";
 
     private Mutex? _singleInstanceMutex;
     private SettingsService? _settingsService;
@@ -26,6 +30,25 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (HasArgument(e.Args, VerifyReleaseArgument))
+        {
+            base.OnStartup(e);
+            Shutdown(VerifyReleaseBundle());
+            return;
+        }
+
+        if (TryGetArgumentValue(e.Args, ShortcutDropHelperArgument, out var handoffId)
+            && Guid.TryParseExact(handoffId, "N", out _))
+        {
+            base.OnStartup(e);
+            PasteTrace.Init("shortcut-drop-helper.log");
+            PasteTrace.Mark("ShortcutDrop_helper_process_started");
+            var helperWindow = new ShortcutDropHelperWindow(handoffId);
+            MainWindow = helperWindow;
+            helperWindow.Show();
+            return;
+        }
+
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isFirstInstance);
         if (!isFirstInstance)
         {
@@ -148,6 +171,98 @@ public partial class App : Application
     private static bool HasArgument(IReadOnlyList<string> args, string expected)
     {
         return args.Any(argument => string.Equals(argument, expected, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static int VerifyReleaseBundle()
+    {
+        try
+        {
+            var assembly = Assembly.GetEntryAssembly();
+            using var resource = assembly?.GetManifestResourceStream(UpdaterStubResourceName);
+            if (resource is null)
+            {
+                return 10;
+            }
+
+            using var buffer = new MemoryStream();
+            resource.CopyTo(buffer);
+            if (buffer.Length < 64)
+            {
+                return 11;
+            }
+
+            buffer.Position = 0;
+            using var reader = new BinaryReader(buffer, System.Text.Encoding.UTF8, leaveOpen: true);
+            if (reader.ReadUInt16() != 0x5A4D)
+            {
+                return 12;
+            }
+
+            buffer.Position = 0x3C;
+            var peOffset = reader.ReadInt32();
+            if (peOffset < 64 || peOffset > buffer.Length - 24)
+            {
+                return 13;
+            }
+
+            buffer.Position = peOffset;
+            if (reader.ReadUInt32() != 0x00004550)
+            {
+                return 14;
+            }
+
+            buffer.Position = peOffset + 6;
+            var sectionCount = reader.ReadUInt16();
+            buffer.Position = peOffset + 20;
+            var optionalHeaderSize = reader.ReadUInt16();
+            if (sectionCount is 0 or > 96 || optionalHeaderSize == 0)
+            {
+                return 15;
+            }
+
+            var sectionTableOffset = peOffset + 24L + optionalHeaderSize;
+            if (sectionTableOffset + sectionCount * 40L > buffer.Length)
+            {
+                return 16;
+            }
+
+            for (var sectionIndex = 0; sectionIndex < sectionCount; sectionIndex++)
+            {
+                var sectionOffset = sectionTableOffset + sectionIndex * 40L;
+                buffer.Position = sectionOffset + 16;
+                var rawDataSize = reader.ReadUInt32();
+                var rawDataOffset = reader.ReadUInt32();
+                if (rawDataSize > 0
+                    && (rawDataOffset == 0 || rawDataOffset + (ulong)rawDataSize > (ulong)buffer.Length))
+                {
+                    return 17;
+                }
+            }
+
+            return 0;
+        }
+        catch
+        {
+            return 18;
+        }
+    }
+
+    private static bool TryGetArgumentValue(
+        IReadOnlyList<string> args,
+        string expected,
+        out string value)
+    {
+        for (var i = 0; i < args.Count - 1; i++)
+        {
+            if (string.Equals(args[i], expected, StringComparison.OrdinalIgnoreCase))
+            {
+                value = args[i + 1];
+                return true;
+            }
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     private static void TryWriteUpdateHealthMarker(IReadOnlyList<string> args)

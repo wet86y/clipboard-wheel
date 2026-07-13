@@ -17,6 +17,7 @@
 - [ ] `shared\DesktopUpdateKit` 指向已经推送到其公开远程仓库的提交。
 - [ ] 确认 `release.config.json` 的仓库、资产名和产物目录属于当前项目。
 - [ ] 确认正式构建使用共享 `UpdaterStub`，没有恢复项目内重复副本。
+- [ ] 构建末尾出现 `Release executable verification passed: --verify-release`；该检查必须直接运行最终单文件 EXE，并确认内嵌替换组件具有完整的 PE/COFF 头及未越界的节区数据。
 - [ ] 只有明确发布时才运行 `scripts\publish-release.ps1`。
 
 ## 编译与打包
