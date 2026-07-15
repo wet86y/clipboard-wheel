@@ -6,6 +6,7 @@
 #include "core/WheelLayout.h"
 #include "core/WheelInteraction.h"
 #include "core/WheelVisualGeometry.h"
+#include "updater/UpdatePolicy.h"
 
 #include <cstdlib>
 #include <cmath>
@@ -233,6 +234,8 @@ void paste_tests() {
 } // namespace
 
 int main() {
+    expect(smk::updater::production_update_ui_enabled,
+        "production native builds expose the updater UI");
     settings_tests();
     layout_tests();
     animation_tests();

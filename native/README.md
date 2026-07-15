@@ -17,8 +17,8 @@
 - 原生构建使用现有 `SettingsVersion = 3`、应用数据目录、互斥体和自启动标识。
 - `DesktopUpdateKit/native` 由根 CMake 直接引入，原生 Stub 以 RCDATA 嵌入单 EXE；`--verify-release`
   会离线验证资源、PE/x64 结构和区段边界。
-- `RelWithDebInfo` 的“关于”页开放检查、下载、暂停、后台继续、节点切换和安装，用于迁移期能力测试；
-  Release 仍显示“原生更新能力验证中”并禁用入口。
+- Release 与 `RelWithDebInfo` 的“关于”页均开放检查、下载、暂停、后台继续、节点切换和安装；
+  Release 固定使用正式仓库，诊断配置可切换到隔离测试仓库。
 - 默认版本集中由 CMake 的 `SMK_VERSION` 管理，当前正式原生目标为 `2.0.0`。诊断联网测试可用
   `--update-test-repository owner/repo` 隔离缓存和更新通道，Release 会拒绝该参数。
 - 正式发布仍由现有 .NET 项目和仓库根目录脚本负责。

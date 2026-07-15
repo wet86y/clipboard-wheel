@@ -6,6 +6,7 @@
 #include "platform/windows/ElevationService.h"
 #include "platform/windows/StartupTrace.h"
 #include "platform/windows/ShortcutDropHelper.h"
+#include "updater/UpdatePolicy.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -100,11 +101,7 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
     updater_ = std::make_unique<smk::updater::NativeUpdateCoordinator>(instance, executable_path(),
         update_repository, desktop_update_kit::Version{kVersionMajor, kVersionMinor, kVersionPatch},
         settings_.update.use_acceleration_nodes,
-#if defined(SMK_DIAGNOSTICS)
-        true,
-#else
-        false,
-#endif
+        smk::updater::production_update_ui_enabled,
         [] { PostQuitMessage(0); });
     if (!settings_window_.create(instance,
             [this](const smk::core::AppSettings& settings) { return save_settings(settings); },

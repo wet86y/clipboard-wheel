@@ -73,7 +73,7 @@ void NativeUpdateCoordinator::check() {
     auto checking = state();
     checking.state = UpdateState::checking;
     checking.status = L"正在检查更新…";
-    SMK_DIAGNOSTIC_EVENT("update.check.started", L"channel=diagnostic");
+    SMK_DIAGNOSTIC_EVENT("update.check.started", L"channel=update");
     publish(checking);
     check_thread_ = std::jthread([this](std::stop_token token) {
         try {
