@@ -30,7 +30,7 @@ set(SMK_MANIFEST_PATH "${SMK_GENERATED_DIR}/app.manifest")
 set(SMK_MANIFEST_RESOURCE_PATH "generated/app.manifest")
 set(SMK_ICON_RESOURCE_PATH "generated/app.ico")
 configure_file(app/app.manifest.in "${SMK_MANIFEST_PATH}" @ONLY)
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/../src/ClipboardWheel/Resources/app.ico"
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/ui/resources/app.ico"
     "${SMK_GENERATED_DIR}/app.ico" COPYONLY)
 configure_file(app/resources.rc.in "${SMK_GENERATED_DIR}/resources.rc" @ONLY)
 configure_file(app/Version.h.in "${SMK_GENERATED_DIR}/Version.h" @ONLY)

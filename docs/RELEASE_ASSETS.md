@@ -1,21 +1,9 @@
 # GitHub Release 资产约定
 
-公开仓库 `wet86y/clipboard-wheel` 保存 Apache-2.0 授权的项目源码、文档和 Release 资产；
-MIT 授权的 `DesktopUpdateKit` 源码由独立仓库维护，并通过 submodule 固定提交。
+稳定版标签使用 `v<major>.<minor>.<patch>`，并必须与 `native/CMakeLists.txt` 中的
+`SMK_VERSION` 一致。
 
-## Release 命名
-
-版本标签使用：
-
-```text
-v1.0.0
-```
-
-版本号必须与 `Directory.Build.props` 中的 `Version` 保持一致。
-
-## 资产
-
-每个稳定版 Release 至少上传：
+每个正式 Release 上传：
 
 ```text
 super-middle-key.exe
@@ -27,31 +15,13 @@ THIRD-PARTY-NOTICES.md
 DesktopUpdateKit-LICENSE.txt
 ```
 
-可使用以下脚本准备资产：
+准备流程：
 
 ```powershell
-.\scripts\build-release.ps1
-.\scripts\prepare-release-assets.ps1 -Version 1.0.0
+.\scripts\run-self-check.ps1
+.\scripts\prepare-release-assets.ps1 -Version 2.0.0 -ReleaseNotes "..."
 ```
 
-资产会生成到：
-
-```text
-build\release-assets\v1.0.0
-```
-
-`build\release-assets` 是本地发布准备目录，不应提交到公开仓库。
-
-## 共享发布工具
-
-发布脚本的实际实现位于 submodule：
-
-```text
-shared\DesktopUpdateKit\tools
-```
-
-当前项目的 `scripts` 目录只保留项目入口和参数转发。项目配置位于根目录 `release.config.json`，其他项目不得复用本项目的仓库名、程序名或资产名。
-
-## 当前安全边界
-
-当前版本使用 SHA-256 校验完整性，但尚未使用 Windows 代码签名证书。发布说明中不得把 SHA-256 描述为发布者身份认证。
+资产生成到 `build\release-assets\v2.0.0`。程序资产使用 ASCII 名称，应用落地名称仍为
+`超级中键.exe`。`update.json`、SHA-256 和许可证资产由 DesktopUpdateKit 共享工具生成；
+SHA-256 只证明完整性，不代替代码签名。

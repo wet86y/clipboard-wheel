@@ -15,8 +15,16 @@ if (-not (Test-Path -LiteralPath $VsWhere)) {
 }
 
 $VisualStudioRoot = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+$VisualStudioVersion = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
 if ([string]::IsNullOrWhiteSpace($VisualStudioRoot)) {
     throw "The MSVC x64 toolchain is not installed."
+}
+
+$VisualStudioMajor = [int]($VisualStudioVersion.Split('.')[0])
+$Generator = switch ($VisualStudioMajor) {
+    18 { "Visual Studio 18 2026" }
+    17 { "Visual Studio 17 2022" }
+    default { throw "Unsupported Visual Studio version: $VisualStudioVersion" }
 }
 
 $CMake = Join-Path $VisualStudioRoot "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
@@ -33,7 +41,7 @@ if ($Clean -and (Test-Path -LiteralPath $BuildRoot)) {
     Remove-Item -LiteralPath $resolvedBuild -Recurse -Force
 }
 
-& $CMake -S $NativeRoot -B $BuildRoot -G "Visual Studio 18 2026" -A x64 -DBUILD_TESTING=ON
+& $CMake -S $NativeRoot -B $BuildRoot -G $Generator -A x64 -DBUILD_TESTING=ON
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $CMake --build $BuildRoot --config $Configuration --parallel

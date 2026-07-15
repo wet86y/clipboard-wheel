@@ -28,7 +28,8 @@
 - [ ] 导入失败时，运行期剪切板监听仍可用。
 - [ ] 启动导入进行中复制新内容，新内容排在最前；后续导入项只补到底部空位，不顶掉当前复制内容。
 
-> 备注：Wheel paste 进不进 Win+V 是 **best-effort**。当前固定 `addPasteToClipboardHistory=false`，会尽量设置 `CanIncludeInClipboardHistory=false`，但 WPF→OLE 链上私有格式传递不被保证。交替粘贴不同内容仍可能写入 Win+V，这是当前兼容性路线的可接受妥协。详见 `docs/DESIGN_NOTES.md` §6。
+> 备注：Wheel paste 进不进 Win+V 是 **best-effort**。原生 `IDataObject` 会公开
+> `CanIncludeInClipboardHistory=false`，但目标应用仍可能重新写入剪贴板历史；这不影响本地自捕获抑制。
 
 ## D. 中键轮盘
 

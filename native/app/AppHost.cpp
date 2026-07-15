@@ -105,7 +105,7 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
         [] { PostQuitMessage(0); });
     if (!settings_window_.create(instance,
             [this](const smk::core::AppSettings& settings) { return save_settings(settings); },
-            updater_.get(), std::wstring(kVersionText) + L"（原生迁移内部构建）")) {
+            updater_.get(), std::wstring(kVersionText))) {
         smk::windows::startup_trace(L"settings window create failed");
         return false;
     }
