@@ -47,39 +47,36 @@
 
 ## 构建
 
-项目只维护 Release 源码路径；调试运行版和打包发布版都从同一套 Release 配置产出。
-
-源码位于 `src\ClipboardWheel`，共享更新组件位于 `shared\DesktopUpdateKit`，脚本位于
-`scripts`，构建生成物统一位于 `build`，正式发布包位于 `artifacts`。首次克隆必须初始化
-子模块：
+超级中键 2.0 使用 C++20、Win32、Direct2D、DirectWrite、WIC、OLE 与 C++/WinRT，支持
+Windows 10 1809 及以上 x64 系统，不依赖 .NET 运行时。源码位于 `native`，共享更新组件
+位于 `shared\DesktopUpdateKit`。首次克隆必须初始化子模块：
 
 ```powershell
 git clone --recurse-submodules https://github.com/wet86y/clipboard-wheel.git
 ```
 
-已有工作区可执行 `git submodule update --init --recursive`。项目不依赖固定磁盘路径或
-当前工作目录，移动时应保留完整仓库结构。
+已有工作区可执行 `git submodule update --init --recursive`。构建脚本通过 Visual Studio
+Installer 自动定位 MSVC、CMake 和 Windows SDK，普通 PowerShell 不需要预先加载开发者环境。
 
-| 版本 | 命令 | 产物位置 | 用途 |
+| 类型 | 命令 | 产物位置 | 用途 |
 |------|------|----------|------|
-| 调试运行版 | `dotnet build .\src\ClipboardWheel\ClipboardWheel.csproj -c Release /p:PasteTraceNextToExecutable=true` | `build\bin\Release\超级中键.exe` | 本地测试；日志写在程序同级目录 |
-| 打包发布版 | `scripts\build-release.ps1` | `artifacts\超级中键-win-x64\超级中键.exe` | 自包含单文件，不写日志，分发用 |
+| 诊断运行版 | `.\scripts\run-dev.ps1` | `build\bin\RelWithDebInfo\超级中键.exe` 与 PDB | 保持优化和真实动画时序，启用结构化诊断日志 |
+| 正式打包版 | `.\scripts\build-release.ps1` | `artifacts\超级中键-win-x64\超级中键.exe` | 单 EXE、无第三方运行时，分发用 |
 
-维护时只认定上述两个输出目录：调试运行版的 `build\bin\Release` 与正式包的 `artifacts\超级中键-win-x64`。不得创建或维护 `artifacts\超级中键-debug-win-x64` 等额外调试分发目录，也不得手工修改 `build/` 或 `artifacts/` 内的编译产物。
-
-调试运行版写同级 `paste-trace.log`（粘贴链路毫秒级事件日志）；打包发布版由脚本显式关闭日志，不生成 `paste-trace.log`。
+`build\native` 只保存 CMake/MSVC 中间文件和测试程序，`build\bin` 只保存便于人工运行的
+应用产物，`artifacts\超级中键-win-x64` 只允许存在正式 `超级中键.exe`。不得创建第二套
+调试发布目录，也不得手工修改生成物。
 
 ## 项目文档
 
-- `docs/BRANCH_PROJECT.md`：分支项目目标、边界、维护纪律和合入条件。
-- `docs/EXTENDED_WHEEL_DESIGN.md`：突破轮盘功能拓展设计草案。
-- `docs/RELEASE_CHECKLIST.md`：打包发布前的代码、编译、手测和提交检查清单。
-- `docs/BUILD_OUTPUT_CONTRACT.md`：调试运行版与正式打包版的唯一维护路径和产物约束。
-- `docs/用户使用说明.md`：给普通使用者阅读的简明说明。
 - `docs/ACCEPTANCE_TESTS.md`：完整人工验收清单。
-- `docs/DESIGN_NOTES.md`：关键设计决策和历史取舍。
-- `docs/IMPLEMENTATION_GUIDE.md`：实现结构和维护入口。
-- `docs/SHARED_UPDATE_ARCHITECTURE.md`：本项目如何通过 Git submodule 接入 `DesktopUpdateKit`。
+- `docs/BUILD_OUTPUT_CONTRACT.md`：中间文件、诊断产物与正式包的唯一目录约束。
+- `docs/EXTENDED_WHEEL_DESIGN.md`：突破轮盘布局和动作语义。
+- `docs/LAUNCH_COMPATIBILITY.md`：浏览器、文档和 WPS 动作兼容规则。
+- `docs/RELEASE_CHECKLIST.md`：原生版本发布门禁。
+- `docs/SHARED_UPDATE_ARCHITECTURE.md`：原生程序如何接入 DesktopUpdateKit。
+- `docs/UPDATE_DESIGN.md`：下载、替换、健康确认与回滚设计。
+- `docs/用户使用说明.md`：普通用户使用说明。
 
 ## 托盘操作
 
@@ -101,14 +98,12 @@ git clone --recurse-submodules https://github.com/wet86y/clipboard-wheel.git
 
 ## 诊断
 
-调试运行版使用 `dotnet build .\src\ClipboardWheel\ClipboardWheel.csproj -c Release /p:PasteTraceNextToExecutable=true`，每次粘贴会在 `build\bin\Release\paste-trace.log` 写入诊断记录。
-打包发布版通过 `scripts/build-release.ps1` 打包。
+运行 `.\scripts\run-dev.ps1` 会构建并启动 `RelWithDebInfo`。诊断日志位于：
 
-提交前可运行 `scripts\run-self-check.ps1`，它会构建调试版并检查日志门控和剪贴板监听基础约束。
-
-```bash
-# 查看最后 200 条
-Get-Content .\build\bin\Release\paste-trace.log -Tail 200
-# 只看最后一次 paste
-Select-String "PasteAsync_end" .\build\bin\Release\paste-trace.log | Select-Object -Last 1
+```text
+%LOCALAPPDATA%\超级中键\logs\native-diagnostic-*.log
 ```
+
+日志为 UTF-8 JSON Lines，不记录剪贴板正文、图片内容、完整路径、URL、窗口标题或用户输入。
+提交前运行 `.\scripts\run-self-check.ps1`，它会构建 Release 与 RelWithDebInfo、执行全部 CTest、
+检查 PDB 和资源，并重新生成唯一正式包。

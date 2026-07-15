@@ -16,10 +16,13 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
       - name: Run repository self-check
         shell: pwsh
         run: .\scripts\run-self-check.ps1
+
+      - name: Upload native Release executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-middle-key-win-x64
+          path: artifacts/超级中键-win-x64/超级中键.exe
+          if-no-files-found: error

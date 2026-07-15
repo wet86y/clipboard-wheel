@@ -1,0 +1,31 @@
+#include <windows.h>
+#pragma code_page(65001)
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "@SMK_MANIFEST_RESOURCE_PATH@"
+101 ICON "@SMK_ICON_RESOURCE_PATH@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK 0x3fL
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "wet86y\0"
+            VALUE "FileDescription", "超级中键\0"
+            VALUE "FileVersion", "@SMK_VERSION@\0"
+            VALUE "InternalName", "SuperMiddleKeyNative\0"
+            VALUE "OriginalFilename", "超级中键.exe\0"
+            VALUE "ProductName", "超级中键\0"
+            VALUE "ProductVersion", "@SMK_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200
+    END
+END

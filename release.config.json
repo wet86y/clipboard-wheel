@@ -3,10 +3,9 @@
   "repository": "wet86y/clipboard-wheel",
   "publishedExeName": "\u8d85\u7ea7\u4e2d\u952e.exe",
   "releaseAssetName": "super-middle-key.exe",
-  "projectFile": "src/ClipboardWheel/ClipboardWheel.csproj",
+  "projectFile": "native/CMakeLists.txt",
   "artifactsDirectory": "artifacts/\u8d85\u7ea7\u4e2d\u952e-win-x64",
   "runtimeIdentifier": "win-x64",
-  "enableSingleFileCompression": true,
   "releaseVerificationArguments": [
     "--verify-release"
   ],
