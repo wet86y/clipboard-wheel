@@ -103,6 +103,10 @@ private:
     void poll_shortcut_drop_handoff();
     void apply_update_state(const smk::updater::UpdateViewState& state);
     void refresh_update_controls();
+    [[nodiscard]] AboutUpdatePresentation about_update_presentation() const noexcept;
+    [[nodiscard]] std::wstring release_notes_text() const;
+    void update_release_notes_metrics(const AboutPageLayout& layout);
+    bool scroll_release_notes(double delta);
 
     void paint_window();
     void paint_page(HWND page, int page_index);
@@ -206,6 +210,10 @@ private:
     smk::updater::UpdateController* update_controller_ = nullptr;
     smk::updater::UpdateViewState update_state_{};
     std::wstring version_text_ = L"2.0.0";
+    double release_notes_scroll_ = 0.0;
+    double release_notes_extent_ = 0.0;
+    bool release_notes_dragging_ = false;
+    double release_notes_drag_offset_ = 0.0;
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2d_factory_;
     Microsoft::WRL::ComPtr<IDWriteFactory> dwrite_factory_;

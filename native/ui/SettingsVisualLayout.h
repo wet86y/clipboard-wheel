@@ -59,8 +59,18 @@ struct WheelPageLayout {
     double shortcut_content_height = 0.0;
 };
 
+enum class AboutUpdatePresentation {
+    compact,
+    release,
+    transfer,
+    completed,
+    launching,
+};
+
 struct AboutPageLayout {
-    UiRect card{};
+    UiRect update_card{};
+    UiRect product_card{};
+    UiRect update_status{};
     UiRect check_update{};
     UiRect install_update{};
     UiRect pause_resume{};
@@ -69,7 +79,11 @@ struct AboutPageLayout {
     UiRect cancel{};
     UiRect acceleration{};
     UiRect progress{};
+    UiRect progress_summary{};
+    UiRect release_notes_card{};
+    UiRect release_notes_title{};
     UiRect release_notes{};
+    UiRect release_notes_scroll_track{};
     UiRect repository_link{};
     double content_height = 0.0;
 };
@@ -77,6 +91,7 @@ struct AboutPageLayout {
 [[nodiscard]] SettingsChromeLayout make_settings_chrome_layout(double width, double height) noexcept;
 [[nodiscard]] BasicPageLayout make_basic_page_layout(double width) noexcept;
 [[nodiscard]] WheelPageLayout make_wheel_page_layout(double width, double viewport_height) noexcept;
-[[nodiscard]] AboutPageLayout make_about_page_layout(double width, double viewport_height) noexcept;
+[[nodiscard]] AboutPageLayout make_about_page_layout(double width, double viewport_height,
+    AboutUpdatePresentation presentation) noexcept;
 
 } // namespace smk::ui

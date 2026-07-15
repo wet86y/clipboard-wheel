@@ -178,6 +178,16 @@ std::wstring window_text(HWND window) {
     return value;
 }
 
+std::wstring format_byte_count(double value) {
+    constexpr const wchar_t* units[]{L"B", L"KiB", L"MiB", L"GiB"};
+    std::size_t unit = 0;
+    while (value >= 1024.0 && unit + 1 < std::size(units)) {
+        value /= 1024.0;
+        ++unit;
+    }
+    return std::format(L"{:.1f} {}", value, units[unit]);
+}
+
 void draw_text(ID2D1RenderTarget* target, IDWriteTextFormat* format, ID2D1Brush* brush,
     std::wstring_view text, const UiRect& bounds,
     DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING,
@@ -781,9 +791,22 @@ LRESULT SettingsWindow::handle_page_message(HWND page, UINT message, WPARAM wpar
     switch (message) {
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: if (index >= 0) paint_page(page, index); return 0;
-    case WM_MOUSEWHEEL:
-        if (index >= 0) scroll_page(index, -GET_WHEEL_DELTA_WPARAM(wparam) / 120.0 * 48.0);
+    case WM_MOUSEWHEEL: {
+        if (index < 0) return 0;
+        const double delta = -GET_WHEEL_DELTA_WPARAM(wparam) / 120.0 * 48.0;
+        if (index == 2) {
+            RECT bounds{}; GetClientRect(page, &bounds);
+            POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+            ScreenToClient(page, &point);
+            const double width = dip(bounds.right, dpi_), height = dip(bounds.bottom, dpi_);
+            const auto layout = make_about_page_layout(width, height, about_update_presentation());
+            const auto viewport = shifted(layout.release_notes, page_scroll_[2]);
+            if (viewport.contains(dip(point.x, dpi_), dip(point.y, dpi_))
+                && scroll_release_notes(delta)) return 0;
+        }
+        scroll_page(index, delta);
         return 0;
+    }
     case WM_LBUTTONDOWN:
         if (index >= 0) {
             RECT bounds{}; GetClientRect(page, &bounds);
@@ -796,6 +819,29 @@ LRESULT SettingsWindow::handle_page_message(HWND page, UINT message, WPARAM wpar
                 else if (IsWindowVisible(browser_url_)
                     && shifted(layout.browser_url, scroll).contains(x, y)) SetFocus(browser_url_);
             }
+            if (index == 2) {
+                const auto layout = make_about_page_layout(width, height, about_update_presentation());
+                update_release_notes_metrics(layout);
+                const double maximum = std::max(0.0, release_notes_extent_ - layout.release_notes.height);
+                const auto track = shifted(layout.release_notes_scroll_track, page_scroll_[2]);
+                if (maximum > 0.5 && UiRect{track.x - 6.0, track.y, 16.0, track.height}.contains(x, y)) {
+                    const double thumb_height = std::max(28.0,
+                        track.height * layout.release_notes.height / release_notes_extent_);
+                    const double thumb_y = track.y + (track.height - thumb_height) * release_notes_scroll_ / maximum;
+                    if (UiRect{track.x - 2.0, thumb_y, 8.0, thumb_height}.contains(x, y)) {
+                        release_notes_dragging_ = true;
+                        release_notes_drag_offset_ = y - thumb_y;
+                        SetCapture(page);
+                    } else {
+                        release_notes_scroll_ = std::clamp(
+                            (y - track.y - thumb_height / 2.0) /
+                                std::max(1.0, track.height - thumb_height) * maximum,
+                            0.0, maximum);
+                        InvalidateRect(page, nullptr, FALSE);
+                    }
+                    return 0;
+                }
+            }
             const double content = page_content_height(index), maximum = std::max(0.0, content - height);
             if (maximum > 0.0 && x >= width - 14.0) {
                 const double thumb = std::max(36.0, height * height / content);
@@ -805,6 +851,35 @@ LRESULT SettingsWindow::handle_page_message(HWND page, UINT message, WPARAM wpar
             }
         }
         return 0;
+    case WM_MOUSEMOVE:
+        if (index == 2 && release_notes_dragging_) {
+            RECT bounds{}; GetClientRect(page, &bounds);
+            const double width = dip(bounds.right, dpi_), height = dip(bounds.bottom, dpi_);
+            const auto layout = make_about_page_layout(width, height, about_update_presentation());
+            update_release_notes_metrics(layout);
+            const double maximum = std::max(0.0, release_notes_extent_ - layout.release_notes.height);
+            const auto track = shifted(layout.release_notes_scroll_track, page_scroll_[2]);
+            const double thumb_height = std::max(28.0,
+                track.height * layout.release_notes.height / std::max(1.0, release_notes_extent_));
+            const double y = dip(GET_Y_LPARAM(lparam), dpi_);
+            release_notes_scroll_ = std::clamp(
+                (y - track.y - release_notes_drag_offset_) /
+                    std::max(1.0, track.height - thumb_height) * maximum,
+                0.0, maximum);
+            InvalidateRect(page, nullptr, FALSE);
+            return 0;
+        }
+        break;
+    case WM_LBUTTONUP:
+        if (index == 2 && release_notes_dragging_) {
+            release_notes_dragging_ = false;
+            if (GetCapture() == page) ReleaseCapture();
+            return 0;
+        }
+        break;
+    case WM_CAPTURECHANGED:
+        if (index == 2) release_notes_dragging_ = false;
+        break;
     case WM_COMMAND: case WM_HSCROLL: case WM_DRAWITEM: case WM_NOTIFY:
     case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX:
         return SendMessageW(window_, message, wparam, lparam);
@@ -1050,7 +1125,9 @@ void SettingsWindow::reposition_page_controls(int index) {
         move_control(browser_url_label_, {28.0, value.editor_card.y + 220.0, 190.0, 40.0}, dpi_, scroll);
         move_centered_edit(browser_url_, value.browser_url, font_, dpi_, scroll);
     } else {
-        const auto value = make_about_page_layout(chrome_.page_viewport.width, chrome_.page_viewport.height);
+        const auto value = make_about_page_layout(chrome_.page_viewport.width,
+            chrome_.page_viewport.height, about_update_presentation());
+        update_release_notes_metrics(value);
         move_control(about_check_update_, value.check_update, dpi_, scroll);
         move_control(about_install_update_, value.install_update, dpi_, scroll);
         move_control(about_pause_resume_, value.pause_resume, dpi_, scroll);
@@ -1119,7 +1196,8 @@ double SettingsWindow::page_content_height(int index) const {
         const auto layout = make_wheel_page_layout(chrome_.page_viewport.width, chrome_.page_viewport.height);
         return SendMessageW(slot_mode_, CB_GETCURSEL, 0, 0) == 1 ? layout.shortcut_content_height : layout.hotkey_content_height;
     }
-    return make_about_page_layout(chrome_.page_viewport.width, chrome_.page_viewport.height).content_height;
+    return make_about_page_layout(chrome_.page_viewport.width, chrome_.page_viewport.height,
+        about_update_presentation()).content_height;
 }
 
 void SettingsWindow::load_controls() {
@@ -1657,7 +1735,8 @@ void SettingsWindow::paint_page(HWND page, int page_index) {
         const double scroll = page_scroll_[static_cast<std::size_t>(page_index)];
         if (page_index == 0) paint_basic_page(target, make_basic_page_layout(width), scroll);
         else if (page_index == 1) paint_wheel_page(target, make_wheel_page_layout(width, height), scroll);
-        else paint_about_page(target, make_about_page_layout(width, height), scroll);
+        else paint_about_page(target, make_about_page_layout(width, height,
+            about_update_presentation()), scroll);
         paint_scrollbar(target, page_index, width, height);
         target->PopAxisAlignedClip();
         end_dc_draw();
@@ -1732,47 +1811,178 @@ void SettingsWindow::paint_wheel_page(ID2D1RenderTarget* target, const WheelPage
 }
 
 void SettingsWindow::paint_about_page(ID2D1RenderTarget* target, const AboutPageLayout& layout, double scroll) {
-    target->FillRoundedRectangle(rounded(layout.card, 8, scroll), card_brush_.Get());
-    target->DrawRoundedRectangle(rounded(layout.card, 8, scroll), border_brush_.Get(), 1.0f);
-    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), update_state_.status,
-        shifted({36, 86, layout.card.width - 150, 44}, scroll));
-    draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), L"加速节点",
-        shifted({layout.card.width - 180, 91, 82, 34}, scroll), DWRITE_TEXT_ALIGNMENT_TRAILING);
+    target->FillRoundedRectangle(rounded(layout.update_card, 8, scroll), card_brush_.Get());
+    target->DrawRoundedRectangle(rounded(layout.update_card, 8, scroll), border_brush_.Get(), 1.0f);
+    draw_line_icon(target, IconKind::refresh, shifted({28, 18, 24, 24}, scroll), glow_brush_.Get());
+    draw_text(target, section_format_.Get(), text_brush_.Get(), L"更新与下载",
+        shifted({62, 8, 240, 44}, scroll));
+    if (!update_state_.version.empty()) {
+        draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), L"目标版本  " + update_state_.version,
+            shifted({layout.update_card.width - 248, 10, 220, 40}, scroll), DWRITE_TEXT_ALIGNMENT_TRAILING);
+    }
+    small_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+    draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), update_state_.status,
+        shifted(layout.update_status, scroll), DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    small_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
+    if (IsWindowVisible(about_acceleration_)) {
+        draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), L"使用加速节点",
+            shifted({layout.acceleration.x - 116.0, layout.acceleration.y - 4.0, 106.0, 34.0}, scroll),
+            DWRITE_TEXT_ALIGNMENT_TRAILING);
+    }
     if (update_state_.total > 0 && (update_state_.state == smk::updater::UpdateState::downloading ||
             update_state_.state == smk::updater::UpdateState::paused || update_state_.state == smk::updater::UpdateState::completed)) {
         target->FillRoundedRectangle(rounded(layout.progress, 5, scroll), border_brush_.Get());
         auto fill = layout.progress;
-        fill.width *= std::clamp(static_cast<double>(update_state_.received) / update_state_.total, 0.0, 1.0);
+        const double ratio = std::clamp(static_cast<double>(update_state_.received) / update_state_.total, 0.0, 1.0);
+        fill.width *= ratio;
         target->FillRoundedRectangle(rounded(fill, 5, scroll), accent_brush_.Get());
+        const auto left = std::format(L"{:.0f}%  ·  {} / {}", ratio * 100.0,
+            format_byte_count(static_cast<double>(update_state_.received)),
+            format_byte_count(static_cast<double>(update_state_.total)));
+        const auto right = std::format(L"{}/s  ·  {}  ·  {} 路{}",
+            format_byte_count(update_state_.bytes_per_second),
+            update_state_.node.empty() ? L"正在选择节点" : update_state_.node,
+            update_state_.connections,
+            update_state_.parallel_fallback ? L"  ·  已回退单路" : L"");
+        auto summary_left = layout.progress_summary;
+        summary_left.width *= 0.46;
+        auto summary_right = layout.progress_summary;
+        summary_right.x = summary_left.right();
+        summary_right.width -= summary_left.width;
+        draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), left,
+            shifted(summary_left, scroll));
+        draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), right,
+            shifted(summary_right, scroll), DWRITE_TEXT_ALIGNMENT_TRAILING);
     }
-    if (!update_state_.release_notes.empty()) {
-        target->FillRoundedRectangle(rounded(layout.release_notes, 6, scroll), control_brush_.Get());
-        draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), update_state_.release_notes,
-            shifted(inset(layout.release_notes, 12), scroll), DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+
+    if (layout.release_notes.width > 0.0) {
+        update_release_notes_metrics(layout);
+        target->FillRoundedRectangle(rounded(layout.release_notes_card, 7, scroll), control_brush_.Get());
+        target->DrawRoundedRectangle(rounded(layout.release_notes_card, 7, scroll), border_brush_.Get(), 1.0f);
+        draw_text(target, body_format_.Get(), text_brush_.Get(), L"更新日志",
+            shifted(layout.release_notes_title, scroll));
+        const auto viewport = shifted(layout.release_notes, scroll);
+        target->PushAxisAlignedClip(rect_f(viewport), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        const auto notes = release_notes_text();
+        Microsoft::WRL::ComPtr<IDWriteTextLayout> text_layout;
+        if (SUCCEEDED(dwrite_factory_->CreateTextLayout(notes.c_str(), static_cast<UINT32>(notes.size()),
+                small_format_.Get(), static_cast<float>(layout.release_notes.width),
+                static_cast<float>(std::max(layout.release_notes.height, release_notes_extent_)),
+                text_layout.GetAddressOf()))) {
+            text_layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+            text_layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            text_layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            target->DrawTextLayout(D2D1::Point2F(static_cast<float>(viewport.x),
+                static_cast<float>(viewport.y - release_notes_scroll_)), text_layout.Get(),
+                secondary_text_brush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        }
+        target->PopAxisAlignedClip();
+
+        const double maximum = std::max(0.0, release_notes_extent_ - layout.release_notes.height);
+        if (maximum > 0.5) {
+            const auto track = shifted(layout.release_notes_scroll_track, scroll);
+            const double thumb_height = std::max(28.0,
+                track.height * layout.release_notes.height / release_notes_extent_);
+            const double thumb_y = track.y + (track.height - thumb_height) * release_notes_scroll_ / maximum;
+            border_brush_->SetOpacity(0.55f);
+            target->FillRoundedRectangle(rounded(track, 2), border_brush_.Get());
+            border_brush_->SetOpacity(1.0f);
+            target->FillRoundedRectangle(rounded({track.x - 1.0, thumb_y, 6.0, thumb_height}, 3),
+                secondary_text_brush_.Get());
+        }
     }
-    target->DrawLine(D2D1::Point2F(36, static_cast<float>(284 - scroll)),
-        D2D1::Point2F(static_cast<float>(layout.card.width - 36), static_cast<float>(284 - scroll)), border_brush_.Get(), 1.0f);
+
+    target->FillRoundedRectangle(rounded(layout.product_card, 8, scroll), card_brush_.Get());
+    target->DrawRoundedRectangle(rounded(layout.product_card, 8, scroll), border_brush_.Get(), 1.0f);
+    const double product_y = layout.product_card.y;
     glow_brush_->SetOpacity(0.20f);
-    draw_text(target, hero_format_.Get(), glow_brush_.Get(), L"超级中键", shifted({38, 298, 360, 62}, scroll));
+    draw_text(target, hero_format_.Get(), glow_brush_.Get(), L"超级中键", shifted({30, product_y + 14, 360, 54}, scroll));
     glow_brush_->SetOpacity(1.0f);
-    draw_text(target, hero_format_.Get(), text_brush_.Get(), L"超级中键", shifted({36, 296, 360, 62}, scroll));
+    draw_text(target, hero_format_.Get(), text_brush_.Get(), L"超级中键", shifted({28, product_y + 12, 360, 54}, scroll));
     draw_text(target, section_format_.Get(), secondary_text_brush_.Get(),
-        L"轻量级 Windows 剪贴板轮盘与效率工具。", shifted({36, 356, layout.card.width - 72, 38}, scroll));
-    draw_line_icon(target, IconKind::user, shifted({38, 398, 26, 26}, scroll), glow_brush_.Get());
-    draw_text(target, body_format_.Get(), text_brush_.Get(), L"开发者：  wet86y", shifted({78, 388, 360, 46}, scroll));
-    draw_line_icon(target, IconKind::repository, shifted({38, 462, 26, 26}, scroll), glow_brush_.Get());
-    draw_text(target, body_format_.Get(), text_brush_.Get(), L"GitHub 历史：", shifted({78, 452, 112, 46}, scroll));
-    draw_line_icon(target, IconKind::info, shifted({38, 522, 26, 26}, scroll), glow_brush_.Get());
-    draw_text(target, body_format_.Get(), text_brush_.Get(), L"当前版本：", shifted({78, 510, 200, 34}, scroll));
-    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), version_text_, shifted({78, 544, 420, 34}, scroll));
+        L"轻量级 Windows 剪贴板轮盘与效率工具。", shifted({30, product_y + 60, layout.product_card.width - 60, 30}, scroll));
+    target->DrawLine(D2D1::Point2F(28, static_cast<float>(product_y + 94 - scroll)),
+        D2D1::Point2F(static_cast<float>(layout.product_card.width - 28), static_cast<float>(product_y + 94 - scroll)),
+        border_brush_.Get(), 1.0f);
+    draw_line_icon(target, IconKind::user, shifted({32, product_y + 106, 22, 22}, scroll), glow_brush_.Get());
+    draw_text(target, body_format_.Get(), text_brush_.Get(), L"开发者", shifted({68, product_y + 96, 104, 42}, scroll));
+    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), L"wet86y", shifted({184, product_y + 96, 240, 42}, scroll));
+    draw_line_icon(target, IconKind::repository, shifted({32, product_y + 150, 22, 22}, scroll), glow_brush_.Get());
+    draw_text(target, body_format_.Get(), text_brush_.Get(), L"GitHub 历史", shifted({68, product_y + 138, 110, 46}, scroll));
+    draw_line_icon(target, IconKind::info, shifted({32, product_y + 194, 22, 22}, scroll), glow_brush_.Get());
+    draw_text(target, body_format_.Get(), text_brush_.Get(), L"当前版本", shifted({68, product_y + 182, 110, 46}, scroll));
+    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), version_text_, shifted({184, product_y + 182, 420, 46}, scroll));
+}
+
+AboutUpdatePresentation SettingsWindow::about_update_presentation() const noexcept {
+    using smk::updater::UpdateState;
+    switch (update_state_.state) {
+    case UpdateState::available: return AboutUpdatePresentation::release;
+    case UpdateState::downloading:
+    case UpdateState::paused: return AboutUpdatePresentation::transfer;
+    case UpdateState::completed: return AboutUpdatePresentation::completed;
+    case UpdateState::launching: return AboutUpdatePresentation::launching;
+    case UpdateState::failed:
+    case UpdateState::cancelled:
+        return update_state_.version.empty() ? AboutUpdatePresentation::compact
+                                             : AboutUpdatePresentation::release;
+    default: return AboutUpdatePresentation::compact;
+    }
+}
+
+std::wstring SettingsWindow::release_notes_text() const {
+    if (!update_state_.release_notes.empty()) return update_state_.release_notes;
+    return update_state_.version.empty() ? std::wstring{} : L"此版本没有附加更新说明。";
+}
+
+void SettingsWindow::update_release_notes_metrics(const AboutPageLayout& layout) {
+    if (layout.release_notes.width <= 0.0 || !dwrite_factory_ || !ensure_render_resources()) {
+        release_notes_extent_ = 0.0;
+        release_notes_scroll_ = 0.0;
+        return;
+    }
+    const auto notes = release_notes_text();
+    Microsoft::WRL::ComPtr<IDWriteTextLayout> text_layout;
+    double extent = layout.release_notes.height;
+    if (!notes.empty() && SUCCEEDED(dwrite_factory_->CreateTextLayout(notes.c_str(),
+            static_cast<UINT32>(notes.size()), small_format_.Get(),
+            static_cast<float>(layout.release_notes.width), 32768.0f, text_layout.GetAddressOf()))) {
+        text_layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+        text_layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        DWRITE_TEXT_METRICS metrics{};
+        if (SUCCEEDED(text_layout->GetMetrics(&metrics)))
+            extent = std::max(extent, std::ceil(static_cast<double>(metrics.height)));
+    }
+    release_notes_extent_ = extent;
+    release_notes_scroll_ = std::clamp(release_notes_scroll_, 0.0,
+        std::max(0.0, release_notes_extent_ - layout.release_notes.height));
+}
+
+bool SettingsWindow::scroll_release_notes(double delta) {
+    const auto layout = make_about_page_layout(chrome_.page_viewport.width,
+        chrome_.page_viewport.height, about_update_presentation());
+    update_release_notes_metrics(layout);
+    const double maximum = std::max(0.0, release_notes_extent_ - layout.release_notes.height);
+    const double next = std::clamp(release_notes_scroll_ + delta, 0.0, maximum);
+    if (std::abs(next - release_notes_scroll_) < 0.1) return false;
+    release_notes_scroll_ = next;
+    InvalidateRect(pages_[2], nullptr, FALSE);
+    return true;
 }
 
 void SettingsWindow::apply_update_state(const smk::updater::UpdateViewState& state) {
+    if (release_notes_dragging_) {
+        release_notes_dragging_ = false;
+        if (GetCapture() == pages_[2]) ReleaseCapture();
+    }
+    if (state.version != update_state_.version || state.release_notes != update_state_.release_notes)
+        release_notes_scroll_ = 0.0;
     update_state_ = state;
     Button_SetCheck(about_acceleration_, state.acceleration ? BST_CHECKED : BST_UNCHECKED);
     set_switch_value(about_acceleration_, state.acceleration);
     refresh_update_controls();
-    InvalidateRect(pages_[2], nullptr, FALSE);
+    reposition_page_controls(2);
 }
 
 void SettingsWindow::refresh_update_controls() {
@@ -1780,15 +1990,20 @@ void SettingsWindow::refresh_update_controls() {
     using smk::updater::UpdateState;
     const bool enabled = update_state_.state != UpdateState::disabled;
     const bool busy = update_state_.state == UpdateState::downloading || update_state_.state == UpdateState::paused;
-    const bool available = update_state_.state == UpdateState::available;
+    const bool has_release = !update_state_.version.empty();
+    const bool available = update_state_.state == UpdateState::available
+        || ((update_state_.state == UpdateState::failed || update_state_.state == UpdateState::cancelled) && has_release);
     const bool completed = update_state_.state == UpdateState::completed;
     const bool checking = update_state_.state == UpdateState::checking;
-    ShowWindow(about_check_update_, busy || completed ? SW_HIDE : SW_SHOW);
+    const bool launching = update_state_.state == UpdateState::launching;
+    ShowWindow(about_check_update_, busy || launching ? SW_HIDE : SW_SHOW);
     EnableWindow(about_check_update_, enabled && !checking);
     SetWindowTextW(about_check_update_, checking ? L"正在检查…" : L"检查更新");
     ShowWindow(about_install_update_, available || completed ? SW_SHOW : SW_HIDE);
     EnableWindow(about_install_update_, enabled && (available || completed));
-    SetWindowTextW(about_install_update_, completed ? L"立即安装" : L"下载更新");
+    SetWindowTextW(about_install_update_, completed ? L"立即安装"
+        : (update_state_.state == UpdateState::failed || update_state_.state == UpdateState::cancelled)
+            ? L"重新下载" : L"下载更新");
     for (auto control : {about_pause_resume_, about_background_, about_cancel_}) ShowWindow(control, busy ? SW_SHOW : SW_HIDE);
     ShowWindow(about_switch_node_, busy && update_state_.acceleration ? SW_SHOW : SW_HIDE);
     SetWindowTextW(about_pause_resume_, update_state_.state == UpdateState::paused ? L"继续下载" : L"暂停下载");
@@ -1796,6 +2011,7 @@ void SettingsWindow::refresh_update_controls() {
     EnableWindow(about_background_, enabled && busy);
     EnableWindow(about_switch_node_, enabled && busy && update_state_.acceleration);
     EnableWindow(about_cancel_, enabled && busy);
+    ShowWindow(about_acceleration_, available ? SW_SHOW : SW_HIDE);
     EnableWindow(about_acceleration_, enabled && !checking);
 }
 

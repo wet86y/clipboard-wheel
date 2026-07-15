@@ -69,21 +69,53 @@ WheelPageLayout make_wheel_page_layout(double width, double viewport_height) noe
     return result;
 }
 
-AboutPageLayout make_about_page_layout(double width, double viewport_height) noexcept {
+AboutPageLayout make_about_page_layout(double width, double viewport_height,
+    AboutUpdatePresentation presentation) noexcept {
     width = std::max(600.0, width);
     AboutPageLayout result{};
-    result.content_height = std::max(620.0, viewport_height);
-    result.card = {0.0, 0.0, width, result.content_height};
-    result.check_update = {36.0, 36.0, 170.0, 44.0};
-    result.install_update = {218.0, 36.0, 170.0, 44.0};
-    result.pause_resume = {36.0, 36.0, 122.0, 44.0};
-    result.background = {170.0, 36.0, 150.0, 44.0};
-    result.switch_node = {332.0, 36.0, 110.0, 44.0};
-    result.cancel = {454.0, 36.0, 96.0, 44.0};
-    result.acceleration = {width - 92.0, 98.0, 56.0, 26.0};
-    result.progress = {36.0, 140.0, width - 72.0, 10.0};
-    result.release_notes = {36.0, 170.0, width - 72.0, 100.0};
-    result.repository_link = {184.0, 458.0, 252.0, 36.0};
+    const bool release = presentation == AboutUpdatePresentation::release;
+    const bool transfer = presentation == AboutUpdatePresentation::transfer;
+    const bool completed = presentation == AboutUpdatePresentation::completed;
+    const bool has_details = release || transfer || completed;
+
+    constexpr double padding = 28.0;
+    constexpr double notes_height = 176.0;
+    result.update_status = {padding, 58.0, width - padding * 2.0, 42.0};
+    result.check_update = {padding, 112.0, 144.0, 40.0};
+    result.install_update = {padding + 156.0, 112.0, 176.0, 40.0};
+    result.pause_resume = {padding, 154.0, 118.0, 40.0};
+    result.background = {padding + 130.0, 154.0, 142.0, 40.0};
+    result.switch_node = {padding + 284.0, 154.0, 112.0, 40.0};
+    result.cancel = {padding + 408.0, 154.0, 88.0, 40.0};
+    result.acceleration = {width - padding - 56.0, 119.0, 56.0, 26.0};
+
+    double notes_y = 0.0;
+    if (transfer || completed) {
+        result.progress = {padding, 110.0, width - padding * 2.0, 10.0};
+        result.progress_summary = {padding, 123.0, width - padding * 2.0, 24.0};
+        if (completed) {
+            result.check_update.y = 154.0;
+            result.install_update.y = 154.0;
+        }
+        notes_y = 212.0;
+    } else if (release) {
+        notes_y = 168.0;
+    }
+
+    if (has_details) {
+        result.release_notes_card = {padding, notes_y, width - padding * 2.0, notes_height + 48.0};
+        result.release_notes_title = {padding + 14.0, notes_y + 8.0, result.release_notes_card.width - 28.0, 28.0};
+        result.release_notes = {padding + 14.0, notes_y + 36.0,
+            result.release_notes_card.width - 38.0, notes_height};
+        result.release_notes_scroll_track = {result.release_notes.right() + 6.0,
+            result.release_notes.y, 4.0, result.release_notes.height};
+    }
+
+    const double update_height = has_details ? result.release_notes_card.bottom() + 20.0 : 176.0;
+    result.update_card = {0.0, 0.0, width, update_height};
+    result.product_card = {0.0, result.update_card.bottom() + 16.0, width, 236.0};
+    result.repository_link = {184.0, result.product_card.y + 141.0, 280.0, 36.0};
+    result.content_height = std::max(viewport_height, result.product_card.bottom() + 16.0);
     return result;
 }
 

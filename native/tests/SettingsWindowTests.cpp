@@ -97,6 +97,46 @@ bool inside(const smk::ui::UiRect& outer, const smk::ui::UiRect& inner) {
         && inner.right() <= outer.right() + epsilon && inner.bottom() <= outer.bottom() + epsilon;
 }
 
+bool overlaps(const smk::ui::UiRect& left, const smk::ui::UiRect& right) {
+    return left.x < right.right() && left.right() > right.x
+        && left.y < right.bottom() && left.bottom() > right.y;
+}
+
+class FakeUpdateController final : public smk::updater::UpdateController {
+public:
+    void set_observer(Observer observer) override {
+        observer_ = std::move(observer);
+        if (observer_) observer_(state_);
+    }
+    smk::updater::UpdateViewState state() const override { return state_; }
+    void check() override { ++checks; }
+    void download_or_resume() override { ++downloads; }
+    void pause() override { ++pauses; }
+    void continue_in_background() override { ++backgrounds; }
+    void cancel() override { ++cancels; }
+    void set_acceleration(bool enabled) override { state_.acceleration = enabled; }
+    void next_node() override { ++node_switches; }
+    bool install() override { ++installs; return true; }
+    void settings_closed() override {}
+    void emit(smk::updater::UpdateViewState state) {
+        state_ = std::move(state);
+        if (observer_) observer_(state_);
+    }
+
+    int checks = 0;
+    int downloads = 0;
+    int pauses = 0;
+    int backgrounds = 0;
+    int cancels = 0;
+    int node_switches = 0;
+    int installs = 0;
+
+private:
+    Observer observer_{};
+    smk::updater::UpdateViewState state_{smk::updater::UpdateState::idle,
+        {}, {}, L"点击“检查更新”获取最新版本。"};
+};
+
 void layout_contract_tests() {
     constexpr std::array<std::pair<double, double>, 3> sizes{{
         {760.0, 640.0}, {960.0, 720.0}, {1536.0, 864.0},
@@ -134,6 +174,46 @@ void layout_contract_tests() {
         expect(wheel.editor_card.y >= wheel.preview_card.bottom()
             && wheel.hotkey_content_height <= wheel.shortcut_content_height,
             "slot editor follows the preview and shortcut mode owns the longer scroll extent");
+
+        for (const auto presentation : {
+                smk::ui::AboutUpdatePresentation::compact,
+                smk::ui::AboutUpdatePresentation::release,
+                smk::ui::AboutUpdatePresentation::transfer,
+                smk::ui::AboutUpdatePresentation::completed,
+                smk::ui::AboutUpdatePresentation::launching}) {
+            const auto about = smk::ui::make_about_page_layout(
+                chrome.page_viewport.width, chrome.page_viewport.height, presentation);
+            expect(about.product_card.y >= about.update_card.bottom() + 15.99,
+                "about product card follows the state-sized update card");
+            expect(inside(about.update_card, about.update_status)
+                && about.product_card.bottom() <= about.content_height + 0.01,
+                "about status and product card stay within the page extent");
+            if (presentation == smk::ui::AboutUpdatePresentation::release) {
+                expect(inside(about.update_card, about.check_update)
+                    && inside(about.update_card, about.install_update)
+                    && inside(about.update_card, about.acceleration)
+                    && inside(about.update_card, about.release_notes_card),
+                    "available update controls and notes stay inside the update card");
+                expect(!overlaps(about.check_update, about.install_update),
+                    "available update actions do not overlap");
+            }
+            if (presentation == smk::ui::AboutUpdatePresentation::transfer) {
+                const std::array actions{about.pause_resume, about.background, about.switch_node, about.cancel};
+                for (const auto& action : actions)
+                    expect(inside(about.update_card, action), "download controls stay inside the update card");
+                for (std::size_t left = 0; left < actions.size(); ++left)
+                    for (std::size_t right = left + 1; right < actions.size(); ++right)
+                        expect(!overlaps(actions[left], actions[right]), "download controls never overlap");
+                expect(inside(about.update_card, about.progress)
+                    && inside(about.update_card, about.release_notes_card),
+                    "download progress and notes stay inside the expanded update card");
+            }
+            if (presentation == smk::ui::AboutUpdatePresentation::completed) {
+                expect(!overlaps(about.progress, about.check_update)
+                    && !overlaps(about.progress, about.install_update),
+                    "completed update actions are placed below the progress bar");
+            }
+        }
     }
 
     for (const unsigned dpi : {96u, 120u, 144u, 192u}) {
@@ -153,11 +233,12 @@ int main() {
     bool saved = false;
     bool allow_save = true;
     smk::core::AppSettings saved_settings;
+    FakeUpdateController update_controller;
     {
         smk::ui::SettingsWindow settings;
         expect(settings.create(GetModuleHandleW(nullptr), [&](const smk::core::AppSettings& value) {
             saved = true; saved_settings = value; return allow_save;
-        }, nullptr, L"2.0.0（测试）"),
+        }, &update_controller, L"2.0.0（测试）"),
             "settings window creates");
         smk::core::AppSettings model;
         model.wheel.extended_wheel.slots[0].name = L"测试槽位";
@@ -338,6 +419,165 @@ int main() {
             expect(client_has_drawn_pixels(child_with_id(window, 2040)),
                 "repository action remains painted across caption hover transitions");
         }
+        const auto emit_update = [&](smk::updater::UpdateViewState state) {
+            update_controller.emit(std::move(state));
+            pump();
+        };
+        const auto visible = [&](int id) {
+            HWND control = child_with_id(window, id);
+            return control && IsWindowVisible(control);
+        };
+        const std::wstring long_notes = [] {
+            std::wstring value;
+            for (int index = 0; index < 36; ++index)
+                value += L"更新日志段落：修复下载状态、节点切换和界面布局，并保持中文内容完整换行。\r\n";
+            return value;
+        }();
+        smk::updater::UpdateViewState available{smk::updater::UpdateState::available};
+        available.version = L"2.0.1";
+        available.release_notes = long_notes;
+        available.status = L"发现新版本 2.0.1。确认说明后可开始下载。";
+        available.acceleration = true;
+        emit_update(available);
+        expect(visible(2041) && visible(2042) && visible(2047)
+            && !visible(2043) && !visible(2046),
+            "available update expands check, download, acceleration and release-note controls");
+        expect(client_corners_avoid_system_white(child_with_id(window, 2041))
+            && client_corners_avoid_system_white(child_with_id(window, 2042)),
+            "update action state changes never expose system-white button pixels");
+        wchar_t* about_hold = nullptr;
+        std::size_t about_hold_length = 0;
+        if (_wdupenv_s(&about_hold, &about_hold_length, L"SMK_SETTINGS_TEST_ABOUT_HOLD_MS") == 0
+            && about_hold) {
+            const DWORD duration = static_cast<DWORD>(std::max(0, _wtoi(about_hold)));
+            free(about_hold);
+            std::cout << "settings_hwnd=" << reinterpret_cast<std::uintptr_t>(window) << '\n' << std::flush;
+            const ULONGLONG deadline = GetTickCount64() + duration;
+            while (GetTickCount64() < deadline) { pump(); Sleep(15); }
+        }
+
+        HWND about_page = GetParent(child_with_id(window, 2041));
+        HWND repository = child_with_id(window, 2040);
+        RECT about_page_bounds{}; GetClientRect(about_page, &about_page_bounds);
+        const UINT about_dpi = GetDpiForWindow(about_page);
+        const auto available_layout = smk::ui::make_about_page_layout(
+            about_page_bounds.right * 96.0 / std::max(1u, about_dpi),
+            about_page_bounds.bottom * 96.0 / std::max(1u, about_dpi),
+            smk::ui::AboutUpdatePresentation::release);
+        POINT notes_point{
+            MulDiv(static_cast<int>(std::lround((available_layout.release_notes.x + 20.0) * 96.0)),
+                static_cast<int>(about_dpi), 96 * 96),
+            MulDiv(static_cast<int>(std::lround((available_layout.release_notes.y + 40.0) * 96.0)),
+                static_cast<int>(about_dpi), 96 * 96)};
+        ClientToScreen(about_page, &notes_point);
+        RECT repository_before{}; GetWindowRect(repository, &repository_before);
+        SendMessageW(about_page, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)),
+            MAKELPARAM(notes_point.x, notes_point.y));
+        pump();
+        RECT repository_after_note_scroll{}; GetWindowRect(repository, &repository_after_note_scroll);
+        expect(EqualRect(&repository_before, &repository_after_note_scroll),
+            "mouse wheel over overflowing release notes scrolls the nested log before the page");
+        const int track_x = MulDiv(static_cast<int>(std::lround(
+            (available_layout.release_notes_scroll_track.x + 2.0) * 96.0)),
+            static_cast<int>(about_dpi), 96 * 96);
+        const int track_top = MulDiv(static_cast<int>(std::lround(
+            available_layout.release_notes_scroll_track.y * 96.0)),
+            static_cast<int>(about_dpi), 96 * 96);
+        const int track_bottom = MulDiv(static_cast<int>(std::lround(
+            available_layout.release_notes_scroll_track.bottom() * 96.0)),
+            static_cast<int>(about_dpi), 96 * 96);
+        SendMessageW(about_page, WM_LBUTTONDOWN, MK_LBUTTON,
+            MAKELPARAM(track_x, track_bottom - 2));
+        SendMessageW(about_page, WM_LBUTTONDOWN, MK_LBUTTON,
+            MAKELPARAM(track_x, track_bottom - 14));
+        expect(GetCapture() == about_page, "release-note scrollbar thumb captures drag input");
+        SendMessageW(about_page, WM_MOUSEMOVE, MK_LBUTTON,
+            MAKELPARAM(track_x, track_top + 14));
+        SendMessageW(about_page, WM_LBUTTONUP, 0,
+            MAKELPARAM(track_x, track_top + 14));
+        pump();
+        RECT repository_after_note_drag{}; GetWindowRect(repository, &repository_after_note_drag);
+        expect(EqualRect(&repository_before, &repository_after_note_drag) && GetCapture() != about_page,
+            "release-note scrollbar drag stays nested and releases mouse capture");
+        for (int index = 0; index < 48; ++index)
+            SendMessageW(about_page, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-WHEEL_DELTA)),
+                MAKELPARAM(notes_point.x, notes_point.y));
+        pump();
+        RECT repository_after_boundary{}; GetWindowRect(repository, &repository_after_boundary);
+        expect(repository_after_boundary.top < repository_before.top,
+            "release-note wheel input transfers to page scrolling after the nested log reaches its boundary");
+
+        smk::updater::UpdateViewState downloading = available;
+        downloading.state = smk::updater::UpdateState::downloading;
+        downloading.status = L"正在下载更新。";
+        downloading.received = 4 * 1024 * 1024;
+        downloading.total = 16 * 1024 * 1024;
+        downloading.bytes_per_second = 2 * 1024 * 1024;
+        downloading.node = L"GitHub";
+        downloading.connections = 4;
+        emit_update(downloading);
+        expect(!visible(2041) && !visible(2042) && visible(2043)
+            && visible(2044) && visible(2045) && visible(2046) && !visible(2047),
+            "download state exposes the complete aligned transfer action set");
+
+        auto paused = downloading;
+        paused.state = smk::updater::UpdateState::paused;
+        paused.status = L"下载已暂停。";
+        emit_update(paused);
+        wchar_t pause_text[64]{};
+        GetWindowTextW(child_with_id(window, 2043), pause_text, static_cast<int>(std::size(pause_text)));
+        expect(std::wstring(pause_text) == L"继续下载", "paused update changes the primary transfer action to resume");
+
+        auto completed = downloading;
+        completed.state = smk::updater::UpdateState::completed;
+        completed.received = completed.total;
+        completed.status = L"下载和校验完成，点击“立即安装”。";
+        emit_update(completed);
+        expect(visible(2041) && visible(2042) && !visible(2043) && !visible(2047),
+            "completed update shows install without leaving transfer controls visible");
+
+        auto failed = available;
+        failed.state = smk::updater::UpdateState::failed;
+        failed.status = L"下载失败，可直接重试。";
+        emit_update(failed);
+        wchar_t retry_text[64]{};
+        GetWindowTextW(child_with_id(window, 2042), retry_text, static_cast<int>(std::size(retry_text)));
+        expect(visible(2042) && std::wstring(retry_text) == L"重新下载",
+            "failed update retains release details and exposes a direct retry action");
+        const int downloads_before_retry = update_controller.downloads;
+        SendMessageW(window, WM_COMMAND, MAKEWPARAM(2042, BN_CLICKED),
+            reinterpret_cast<LPARAM>(child_with_id(window, 2042)));
+        expect(update_controller.downloads == downloads_before_retry + 1,
+            "retry action reuses the retained release without another update check");
+
+        auto cancelled = available;
+        cancelled.state = smk::updater::UpdateState::cancelled;
+        cancelled.status = L"下载已取消。";
+        emit_update(cancelled);
+        GetWindowTextW(child_with_id(window, 2042), retry_text, static_cast<int>(std::size(retry_text)));
+        expect(visible(2042) && std::wstring(retry_text) == L"重新下载",
+            "cancelled update also retains release details and retry controls");
+
+        auto launching = completed;
+        launching.state = smk::updater::UpdateState::launching;
+        launching.status = L"更新助理已启动，程序即将退出…";
+        emit_update(launching);
+        expect(!visible(2041) && !visible(2042) && !visible(2043) && !visible(2047),
+            "launching state collapses every action while the updater takes over");
+
+        smk::updater::UpdateViewState checking{smk::updater::UpdateState::checking};
+        checking.status = L"正在检查更新…";
+        checking.acceleration = true;
+        emit_update(checking);
+        expect(visible(2041) && !IsWindowEnabled(child_with_id(window, 2041))
+            && !visible(2042) && !visible(2047),
+            "checking state collapses optional controls and keeps one disabled primary action");
+        smk::updater::UpdateViewState disabled{smk::updater::UpdateState::disabled};
+        disabled.status = L"原生更新能力验证中，正式 Release 暂未开放。";
+        emit_update(disabled);
+        expect(visible(2041) && !IsWindowEnabled(child_with_id(window, 2041))
+            && !visible(2042) && !visible(2047),
+            "release-disabled state keeps the compact status card without active update controls");
         activate_tab(0);
         validate_visible_control_pixels();
         pump();
