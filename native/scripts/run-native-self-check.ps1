@@ -19,12 +19,12 @@ $CTest = Join-Path $VisualStudioRoot "Common7\IDE\CommonExtensions\Microsoft\CMa
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $NativeBin = Join-Path $BuildRoot "bin\$Configuration"
-$NativeExe = Get-ChildItem -LiteralPath $NativeBin -Filter "*.exe" |
-    Where-Object { $_.Name -notmatch "_tests\.exe$" } |
-    Select-Object -First 1
-if ($null -eq $NativeExe) {
-    throw "Native application executable was not produced under: $NativeBin"
+$NativeAppName = (-join [char[]]@(0x8D85, 0x7EA7, 0x4E2D, 0x952E)) + ".exe"
+$NativeExePath = Join-Path $NativeBin $NativeAppName
+if (-not (Test-Path -LiteralPath $NativeExePath -PathType Leaf)) {
+    throw "Native application executable was not produced: $NativeExePath"
 }
+$NativeExe = Get-Item -LiteralPath $NativeExePath
 
 $VersionInfo = $NativeExe.VersionInfo
 if ($VersionInfo.FileDescription -ne $NativeExe.BaseName) {
