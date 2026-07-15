@@ -63,6 +63,13 @@ struct AboutPageLayout {
     UiRect card{};
     UiRect check_update{};
     UiRect install_update{};
+    UiRect pause_resume{};
+    UiRect background{};
+    UiRect switch_node{};
+    UiRect cancel{};
+    UiRect acceleration{};
+    UiRect progress{};
+    UiRect release_notes{};
     UiRect repository_link{};
     double content_height = 0.0;
 };

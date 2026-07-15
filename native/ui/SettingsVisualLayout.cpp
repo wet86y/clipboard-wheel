@@ -72,11 +72,18 @@ WheelPageLayout make_wheel_page_layout(double width, double viewport_height) noe
 AboutPageLayout make_about_page_layout(double width, double viewport_height) noexcept {
     width = std::max(600.0, width);
     AboutPageLayout result{};
-    result.content_height = std::max(520.0, viewport_height);
+    result.content_height = std::max(620.0, viewport_height);
     result.card = {0.0, 0.0, width, result.content_height};
     result.check_update = {36.0, 36.0, 170.0, 44.0};
     result.install_update = {218.0, 36.0, 170.0, 44.0};
-    result.repository_link = {184.0, 360.0, 252.0, 36.0};
+    result.pause_resume = {36.0, 36.0, 122.0, 44.0};
+    result.background = {170.0, 36.0, 150.0, 44.0};
+    result.switch_node = {332.0, 36.0, 110.0, 44.0};
+    result.cancel = {454.0, 36.0, 96.0, 44.0};
+    result.acceleration = {width - 92.0, 98.0, 56.0, 26.0};
+    result.progress = {36.0, 140.0, width - 72.0, 10.0};
+    result.release_notes = {36.0, 170.0, width - 72.0, 100.0};
+    result.repository_link = {184.0, 458.0, 252.0, 36.0};
     return result;
 }
 

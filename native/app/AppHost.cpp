@@ -1,4 +1,5 @@
 #include "app/AppHost.h"
+#include "Version.h"
 
 #include "platform/windows/AutoStart.h"
 #include "platform/windows/CrashHandler.h"
@@ -7,7 +8,11 @@
 #include "platform/windows/ShortcutDropHelper.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstring>
+#include <filesystem>
 #include <format>
+#include <optional>
 #include <wtsapi32.h>
 
 namespace smk::app {
@@ -17,6 +22,20 @@ bool has_argument(const std::vector<std::wstring>& arguments, const wchar_t* exp
     return std::any_of(arguments.begin(), arguments.end(), [&](const std::wstring& value) {
         return _wcsicmp(value.c_str(), expected) == 0;
     });
+}
+
+std::optional<std::wstring> argument_value(const std::vector<std::wstring>& arguments, const wchar_t* expected) {
+    for (std::size_t index = 0; index + 1 < arguments.size(); ++index)
+        if (_wcsicmp(arguments[index].c_str(), expected) == 0) return arguments[index + 1];
+    return {};
+}
+
+std::string utf8(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int count = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    std::string result(static_cast<std::size_t>(std::max(0, count)), '\0');
+    if (count) WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), count, nullptr, nullptr);
+    return result;
 }
 
 } // namespace
@@ -32,11 +51,12 @@ int AppHost::run(HINSTANCE instance, const std::vector<std::wstring>& arguments)
         if (_wcsicmp(arguments[index].c_str(), L"--shortcut-drop-helper") == 0)
             return smk::windows::run_shortcut_drop_helper(instance, arguments[index + 1]);
     }
-    if (has_argument(arguments, L"--verify-release")) {
-        MessageBoxW(nullptr, L"原生更新器尚未完成，此迁移构建不能作为正式发布包。", L"超级中键", MB_OK | MB_ICONWARNING);
-        return 3;
-    }
+    if (has_argument(arguments, L"--verify-release")) return verify_release_bundle(instance);
+#if !defined(SMK_DIAGNOSTICS)
+    if (has_argument(arguments, L"--update-test-repository")) return 4;
+#endif
     if (!initialize(instance, arguments)) return 1;
+    (void)write_update_health_marker(arguments);
     MSG message{};
     BOOL get_message = FALSE;
     while ((get_message = GetMessageW(&message, nullptr, 0, 0)) > 0) {
@@ -72,7 +92,23 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
         if (mouse_hook_) mouse_hook_->cancel_session(mouse_hook_->generation());
         cancel_wheel_no_action();
     });
-    if (!settings_window_.create(instance, [this](const smk::core::AppSettings& settings) { return save_settings(settings); })) {
+    std::string update_repository = "wet86y/clipboard-wheel";
+#if defined(SMK_DIAGNOSTICS)
+    if (const auto test_repository = argument_value(arguments, L"--update-test-repository"))
+        update_repository = utf8(*test_repository);
+#endif
+    updater_ = std::make_unique<smk::updater::NativeUpdateCoordinator>(instance, executable_path(),
+        update_repository, desktop_update_kit::Version{kVersionMajor, kVersionMinor, kVersionPatch},
+        settings_.update.use_acceleration_nodes,
+#if defined(SMK_DIAGNOSTICS)
+        true,
+#else
+        false,
+#endif
+        [] { PostQuitMessage(0); });
+    if (!settings_window_.create(instance,
+            [this](const smk::core::AppSettings& settings) { return save_settings(settings); },
+            updater_.get(), std::wstring(kVersionText) + L"（原生迁移内部构建）")) {
         smk::windows::startup_trace(L"settings window create failed");
         return false;
     }
@@ -143,6 +179,7 @@ void AppHost::shutdown() {
     }
     destroy_input_safety_window();
     extended_actions_.shutdown();
+    if (updater_) { updater_->shutdown(); updater_.reset(); }
     windows_history_.reset();
     clipboard_.reset();
     tray_.destroy();
@@ -345,6 +382,7 @@ bool AppHost::save_settings(const smk::core::AppSettings& settings) {
         if (enabled_) mouse_hook_->retry_now();
     }
     clipboard_->set_capture_images(settings_.clipboard.capture_images);
+    if (updater_) updater_->set_acceleration(settings_.update.use_acceleration_nodes);
     tray_.set_enabled(enabled_);
     if (settings_.run_as_administrator_enabled != smk::windows::is_administrator()) {
         if (!smk::windows::restart_with_privilege(settings_.run_as_administrator_enabled, error)) {
@@ -379,6 +417,60 @@ void AppHost::send_ctrl_c() {
     inputs[3] = inputs[0];
     inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(4, inputs, sizeof(INPUT));
+}
+
+bool AppHost::write_update_health_marker(const std::vector<std::wstring>& arguments) {
+    const auto marker = argument_value(arguments, L"--update-health");
+    if (!marker) return false;
+    try {
+        const std::filesystem::path path(*marker);
+        if (!path.is_absolute() || path.parent_path().empty()) return false;
+        std::filesystem::create_directories(path.parent_path());
+        const auto temporary = path.wstring() + L".tmp." + std::to_wstring(GetCurrentProcessId());
+        HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return false;
+        const auto text = utf8(kVersionText);
+        DWORD written{};
+        const bool ok = WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr) && written == text.size();
+        FlushFileBuffers(file);
+        CloseHandle(file);
+        if (!ok || !MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            DeleteFileW(temporary.c_str());
+            return false;
+        }
+        return true;
+    } catch (...) { return false; }
+}
+
+int AppHost::verify_release_bundle(HINSTANCE instance) {
+    HRSRC resource = FindResourceW(instance, MAKEINTRESOURCEW(201), RT_RCDATA);
+    if (!resource) return 10;
+    HGLOBAL loaded = LoadResource(instance, resource);
+    const DWORD size = SizeofResource(instance, resource);
+    const auto* bytes = static_cast<const std::byte*>(LockResource(loaded));
+    if (!bytes || size < 128 || std::to_integer<unsigned char>(bytes[0]) != 'M' ||
+        std::to_integer<unsigned char>(bytes[1]) != 'Z') return 11;
+    std::uint32_t pe_offset{};
+    std::memcpy(&pe_offset, bytes + 0x3c, sizeof(pe_offset));
+    if (pe_offset > size - 24) return 12;
+    std::uint32_t signature{};
+    std::memcpy(&signature, bytes + pe_offset, sizeof(signature));
+    std::uint16_t machine{}, sections{}, optional_size{};
+    std::memcpy(&machine, bytes + pe_offset + 4, sizeof(machine));
+    std::memcpy(&sections, bytes + pe_offset + 6, sizeof(sections));
+    std::memcpy(&optional_size, bytes + pe_offset + 20, sizeof(optional_size));
+    if (signature != 0x00004550 || machine != IMAGE_FILE_MACHINE_AMD64 || sections == 0 || sections > 96 || optional_size == 0) return 13;
+    const std::uint64_t section_table = static_cast<std::uint64_t>(pe_offset) + 24 + optional_size;
+    if (section_table + static_cast<std::uint64_t>(sections) * 40 > size) return 14;
+    for (std::uint16_t index = 0; index < sections; ++index) {
+        std::uint32_t raw_size{}, raw_offset{};
+        const auto offset = section_table + static_cast<std::uint64_t>(index) * 40;
+        std::memcpy(&raw_size, bytes + offset + 16, sizeof(raw_size));
+        std::memcpy(&raw_offset, bytes + offset + 20, sizeof(raw_offset));
+        if (raw_size && (!raw_offset || static_cast<std::uint64_t>(raw_offset) + raw_size > size)) return 15;
+    }
+    return 0;
 }
 
 } // namespace smk::app

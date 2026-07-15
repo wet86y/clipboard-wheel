@@ -11,6 +11,7 @@
 #include "platform/windows/WindowsClipboardHistory.h"
 #include "ui/SettingsWindow.h"
 #include "ui/WheelWindow.h"
+#include "updater/NativeUpdateCoordinator.h"
 
 #include <windows.h>
 
@@ -41,6 +42,8 @@ private:
     void show_settings();
     bool save_settings(const smk::core::AppSettings& settings);
     static std::wstring executable_path();
+    static bool write_update_health_marker(const std::vector<std::wstring>& arguments);
+    static int verify_release_bundle(HINSTANCE instance);
     static void send_ctrl_c();
 
     HINSTANCE instance_ = nullptr;
@@ -56,6 +59,7 @@ private:
     std::unique_ptr<smk::windows::WindowsClipboardHistory> windows_history_;
     std::unique_ptr<smk::windows::MouseHook> mouse_hook_;
     smk::windows::ExtendedActionExecutor extended_actions_;
+    std::unique_ptr<smk::updater::NativeUpdateCoordinator> updater_;
     bool enabled_ = true;
     bool lock_changed_ = false;
     bool shutting_down_ = false;

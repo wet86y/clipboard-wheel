@@ -157,7 +157,7 @@ int main() {
         smk::ui::SettingsWindow settings;
         expect(settings.create(GetModuleHandleW(nullptr), [&](const smk::core::AppSettings& value) {
             saved = true; saved_settings = value; return allow_save;
-        }),
+        }, nullptr, L"2.0.0（测试）"),
             "settings window creates");
         smk::core::AppSettings model;
         model.wheel.extended_wheel.slots[0].name = L"测试槽位";

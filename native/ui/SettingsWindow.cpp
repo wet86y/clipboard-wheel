@@ -21,6 +21,7 @@
 #include <cmath>
 #include <filesystem>
 #include <format>
+#include <memory>
 #include <numeric>
 #include <tuple>
 #include <vector>
@@ -38,10 +39,13 @@ constexpr int kQuickCopy = 2016, kCaptureImages = 2017, kAutoStart = 2018, kAdmi
 constexpr int kExtended = 2030, kBreakout = 2031, kPreview = 2032, kSlotMode = 2033;
 constexpr int kSlotName = 2034, kSlotAction = 2035, kSlotBehavior = 2036, kBrowserUrl = 2037;
 constexpr int kSlotValue = 2038, kRepositoryLink = 2040;
+constexpr int kUpdateCheck = 2041, kUpdateInstall = 2042, kUpdatePause = 2043;
+constexpr int kUpdateBackground = 2044, kUpdateSwitchNode = 2045, kUpdateCancel = 2046, kUpdateAcceleration = 2047;
 constexpr int kTabButtonBase = 2060;
 constexpr UINT_PTR kHandoffTimer = 11;
 constexpr UINT_PTR kSwitchAnimationTimer = 12;
 constexpr UINT kHotkeyCapturedMessage = WM_APP + 41;
+constexpr UINT kUpdateStateMessage = WM_APP + 52;
 constexpr UINT kSwitchAnimationFrameMs = 15;
 constexpr double kSwitchAnimationDurationMs = 110.0;
 constexpr double kCircleCornerRadius = 10.0;
@@ -277,6 +281,7 @@ void draw_line_icon(ID2D1RenderTarget* target, IconKind kind, const UiRect& box,
 } // namespace
 
 SettingsWindow::~SettingsWindow() {
+    if (update_controller_) update_controller_->set_observer({});
     hotkey_capture_.stop();
     shortcut_drop_.reset();
     discard_render_resources();
@@ -289,9 +294,12 @@ SettingsWindow::~SettingsWindow() {
     if (control_brush_gdi_) DeleteObject(control_brush_gdi_);
 }
 
-bool SettingsWindow::create(HINSTANCE instance, SaveCallback save_callback) {
+bool SettingsWindow::create(HINSTANCE instance, SaveCallback save_callback,
+    smk::updater::UpdateController* update_controller, std::wstring version_text) {
     instance_ = instance;
     save_ = std::move(save_callback);
+    update_controller_ = update_controller;
+    version_text_ = std::move(version_text);
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_TAB_CLASSES};
     InitCommonControlsEx(&controls);
     if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2d_factory_.GetAddressOf()))
@@ -350,6 +358,12 @@ bool SettingsWindow::create(HINSTANCE instance, SaveCallback save_callback) {
         [this](const std::wstring& path) { accept_shortcut_path(path); },
     }, &drop_error);
     if (FAILED(drop_error)) SMK_DIAGNOSTIC_EVENT("settings.drop_target", std::format(L"result=failed hresult={:#x}", static_cast<unsigned>(drop_error)));
+    if (update_controller_) {
+        update_controller_->set_observer([this](const smk::updater::UpdateViewState& state) {
+            auto* copy = new smk::updater::UpdateViewState(state);
+            if (!window_ || !PostMessageW(window_, kUpdateStateMessage, 0, reinterpret_cast<LPARAM>(copy))) delete copy;
+        });
+    }
     return true;
 }
 
@@ -358,6 +372,7 @@ void SettingsWindow::show(const smk::core::AppSettings& settings) {
     settings_ = settings;
     page_scroll_.fill(0.0);
     load_controls();
+    if (update_controller_) apply_update_state(update_controller_->state());
     const HWND foreground = GetForegroundWindow();
     HMONITOR monitor = MonitorFromWindow(foreground ? foreground : window_, MONITOR_DEFAULTTONEAREST);
     MONITORINFO info{sizeof(info)};
@@ -582,8 +597,14 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
     }
     case WM_CLOSE:
         cancel_hotkey_recording();
+        if (update_controller_) update_controller_->settings_closed();
         ShowWindow(window_, SW_HIDE);
         return 0;
+    case kUpdateStateMessage: {
+        std::unique_ptr<smk::updater::UpdateViewState> state(reinterpret_cast<smk::updater::UpdateViewState*>(lparam));
+        if (state) apply_update_state(*state);
+        return 0;
+    }
     case WM_ACTIVATE:
         if (LOWORD(wparam) == WA_INACTIVE && hotkey_recorder_.recording()) {
             cancel_hotkey_recording();
@@ -699,6 +720,24 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
         if (id == kRepositoryLink && notification == BN_CLICKED) {
             ShellExecuteW(window_, L"open", L"https://github.com/wet86y/clipboard-wheel", nullptr, nullptr, SW_SHOWNORMAL);
             return 0;
+        }
+        if (notification == BN_CLICKED && update_controller_) {
+            if (id == kUpdateCheck) { update_controller_->check(); return 0; }
+            if (id == kUpdateInstall) { update_controller_->download_or_resume(); return 0; }
+            if (id == kUpdatePause) {
+                if (update_state_.state == smk::updater::UpdateState::paused) update_controller_->download_or_resume();
+                else update_controller_->pause();
+                return 0;
+            }
+            if (id == kUpdateBackground) { update_controller_->continue_in_background(); SendMessageW(window_, WM_CLOSE, 0, 0); return 0; }
+            if (id == kUpdateSwitchNode) { update_controller_->next_node(); return 0; }
+            if (id == kUpdateCancel) { update_controller_->cancel(); return 0; }
+            if (id == kUpdateAcceleration) {
+                animate_switch(about_acceleration_);
+                settings_.update.use_acceleration_nodes = Button_GetCheck(about_acceleration_) == BST_CHECKED;
+                update_controller_->set_acceleration(settings_.update.use_acceleration_nodes);
+                return 0;
+            }
         }
         if (id == kSave) { cancel_hotkey_recording(); save_controls(); return 0; }
         if (id == kClose) { SendMessageW(window_, WM_CLOSE, 0, 0); return 0; }
@@ -831,14 +870,15 @@ void SettingsWindow::create_controls() {
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(3000 + index)), instance_, this);
     }
     create_basic_page(); create_wheel_page(); create_about_page();
-    switch_animations_ = {{{quick_copy_}, {capture_images_}, {auto_start_}, {administrator_}, {extended_enabled_}}};
+    switch_animations_ = {{{quick_copy_}, {capture_images_}, {auto_start_}, {administrator_}, {extended_enabled_}, {about_acceleration_}}};
     for (std::size_t index = 0; index < switch_animations_.size(); ++index)
         SetWindowSubclass(switch_animations_[index].control, switch_subclass_proc, index + 1, reinterpret_cast<DWORD_PTR>(this));
     save_button_ = make_control(instance_, window_, L"BUTTON", L"保存", BS_OWNERDRAW | WS_TABSTOP, kSave);
     close_button_ = make_control(instance_, window_, L"BUTTON", L"关闭", BS_OWNERDRAW | WS_TABSTOP, kClose);
     const std::array owner_buttons{
         tab_buttons_[0], tab_buttons_[1], tab_buttons_[2], save_button_, close_button_,
-        slot_action_, about_check_update_, about_install_update_, repository_link_,
+        slot_action_, about_check_update_, about_install_update_, about_pause_resume_, about_background_,
+        about_switch_node_, about_cancel_, repository_link_,
     };
     for (std::size_t index = 0; index < owner_buttons.size(); ++index)
         SetWindowSubclass(owner_buttons[index], button_subclass_proc, index + 1,
@@ -919,10 +959,15 @@ void SettingsWindow::create_wheel_page() {
 
 void SettingsWindow::create_about_page() {
     HWND page = pages_[2];
-    about_check_update_ = make_control(instance_, page, L"BUTTON", L"检查更新", BS_OWNERDRAW | WS_TABSTOP | WS_DISABLED, 0);
-    about_install_update_ = make_control(instance_, page, L"BUTTON", L"下载并安装", BS_OWNERDRAW | WS_TABSTOP | WS_DISABLED, 0);
-    EnableWindow(about_check_update_, FALSE); EnableWindow(about_install_update_, FALSE);
+    about_check_update_ = make_control(instance_, page, L"BUTTON", L"检查更新", BS_OWNERDRAW | WS_TABSTOP, kUpdateCheck);
+    about_install_update_ = make_control(instance_, page, L"BUTTON", L"下载更新", BS_OWNERDRAW | WS_TABSTOP, kUpdateInstall);
+    about_pause_resume_ = make_control(instance_, page, L"BUTTON", L"暂停下载", BS_OWNERDRAW | WS_TABSTOP, kUpdatePause);
+    about_background_ = make_control(instance_, page, L"BUTTON", L"转入后台", BS_OWNERDRAW | WS_TABSTOP, kUpdateBackground);
+    about_switch_node_ = make_control(instance_, page, L"BUTTON", L"切换节点", BS_OWNERDRAW | WS_TABSTOP, kUpdateSwitchNode);
+    about_cancel_ = make_control(instance_, page, L"BUTTON", L"取消", BS_OWNERDRAW | WS_TABSTOP, kUpdateCancel);
+    about_acceleration_ = make_control(instance_, page, L"BUTTON", L"", BS_AUTOCHECKBOX | BS_OWNERDRAW | WS_TABSTOP, kUpdateAcceleration);
     repository_link_ = make_control(instance_, page, L"BUTTON", L"查看项目仓库与更新记录  ↗", BS_OWNERDRAW | WS_TABSTOP, kRepositoryLink);
+    refresh_update_controls();
 }
 
 void SettingsWindow::recreate_font() {
@@ -1008,6 +1053,11 @@ void SettingsWindow::reposition_page_controls(int index) {
         const auto value = make_about_page_layout(chrome_.page_viewport.width, chrome_.page_viewport.height);
         move_control(about_check_update_, value.check_update, dpi_, scroll);
         move_control(about_install_update_, value.install_update, dpi_, scroll);
+        move_control(about_pause_resume_, value.pause_resume, dpi_, scroll);
+        move_control(about_background_, value.background, dpi_, scroll);
+        move_control(about_switch_node_, value.switch_node, dpi_, scroll);
+        move_control(about_cancel_, value.cancel, dpi_, scroll);
+        move_control(about_acceleration_, value.acceleration, dpi_, scroll);
         move_control(repository_link_, value.repository_link, dpi_, scroll);
     }
     redraw_page_controls(index);
@@ -1085,11 +1135,12 @@ void SettingsWindow::load_controls() {
     Button_SetCheck(auto_start_, settings_.auto_start_enabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(administrator_, settings_.run_as_administrator_enabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(extended_enabled_, settings_.wheel.extended_wheel.enabled ? BST_CHECKED : BST_UNCHECKED);
+    Button_SetCheck(about_acceleration_, settings_.update.use_acceleration_nodes ? BST_CHECKED : BST_UNCHECKED);
     SendMessageW(breakout_, TBM_SETPOS, TRUE, static_cast<LPARAM>(settings_.wheel.extended_wheel.breakout_buffer_pixels));
     SetWindowTextW(admin_status_, L"");
     loading_ = false;
     load_slot(0); update_value_labels();
-    for (auto control : {quick_copy_, capture_images_, auto_start_, administrator_, extended_enabled_})
+    for (auto control : {quick_copy_, capture_images_, auto_start_, administrator_, extended_enabled_, about_acceleration_})
         set_switch_value(control, Button_GetCheck(control) == BST_CHECKED);
     InvalidateRect(preview_, nullptr, FALSE);
 }
@@ -1108,6 +1159,7 @@ void SettingsWindow::save_controls() {
     settings_.auto_start_enabled = Button_GetCheck(auto_start_) == BST_CHECKED;
     settings_.run_as_administrator_enabled = Button_GetCheck(administrator_) == BST_CHECKED;
     settings_.wheel.extended_wheel.enabled = Button_GetCheck(extended_enabled_) == BST_CHECKED;
+    settings_.update.use_acceleration_nodes = Button_GetCheck(about_acceleration_) == BST_CHECKED;
     settings_.wheel.extended_wheel.breakout_buffer_pixels = static_cast<double>(SendMessageW(breakout_, TBM_GETPOS, 0, 0));
     smk::core::normalize_settings(settings_);
     SMK_DIAGNOSTIC_EVENT("settings.save", std::format(L"shape={} sectors={} radius={} dead={} opacity={:.2f} extended={}",
@@ -1682,24 +1734,69 @@ void SettingsWindow::paint_wheel_page(ID2D1RenderTarget* target, const WheelPage
 void SettingsWindow::paint_about_page(ID2D1RenderTarget* target, const AboutPageLayout& layout, double scroll) {
     target->FillRoundedRectangle(rounded(layout.card, 8, scroll), card_brush_.Get());
     target->DrawRoundedRectangle(rounded(layout.card, 8, scroll), border_brush_.Get(), 1.0f);
-    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(),
-        L"原生更新器尚未迁移；检查、下载和节点功能在内部构建中保持禁用。",
-        shifted({36, 88, layout.card.width - 72, 40}, scroll));
-    target->DrawLine(D2D1::Point2F(36, static_cast<float>(150 - scroll)),
-        D2D1::Point2F(static_cast<float>(layout.card.width - 36), static_cast<float>(150 - scroll)), border_brush_.Get(), 1.0f);
+    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), update_state_.status,
+        shifted({36, 86, layout.card.width - 150, 44}, scroll));
+    draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), L"加速节点",
+        shifted({layout.card.width - 180, 91, 82, 34}, scroll), DWRITE_TEXT_ALIGNMENT_TRAILING);
+    if (update_state_.total > 0 && (update_state_.state == smk::updater::UpdateState::downloading ||
+            update_state_.state == smk::updater::UpdateState::paused || update_state_.state == smk::updater::UpdateState::completed)) {
+        target->FillRoundedRectangle(rounded(layout.progress, 5, scroll), border_brush_.Get());
+        auto fill = layout.progress;
+        fill.width *= std::clamp(static_cast<double>(update_state_.received) / update_state_.total, 0.0, 1.0);
+        target->FillRoundedRectangle(rounded(fill, 5, scroll), accent_brush_.Get());
+    }
+    if (!update_state_.release_notes.empty()) {
+        target->FillRoundedRectangle(rounded(layout.release_notes, 6, scroll), control_brush_.Get());
+        draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), update_state_.release_notes,
+            shifted(inset(layout.release_notes, 12), scroll), DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    }
+    target->DrawLine(D2D1::Point2F(36, static_cast<float>(284 - scroll)),
+        D2D1::Point2F(static_cast<float>(layout.card.width - 36), static_cast<float>(284 - scroll)), border_brush_.Get(), 1.0f);
     glow_brush_->SetOpacity(0.20f);
-    draw_text(target, hero_format_.Get(), glow_brush_.Get(), L"超级中键", shifted({38, 174, 360, 62}, scroll));
+    draw_text(target, hero_format_.Get(), glow_brush_.Get(), L"超级中键", shifted({38, 298, 360, 62}, scroll));
     glow_brush_->SetOpacity(1.0f);
-    draw_text(target, hero_format_.Get(), text_brush_.Get(), L"超级中键", shifted({36, 172, 360, 62}, scroll));
+    draw_text(target, hero_format_.Get(), text_brush_.Get(), L"超级中键", shifted({36, 296, 360, 62}, scroll));
     draw_text(target, section_format_.Get(), secondary_text_brush_.Get(),
-        L"轻量级 Windows 剪贴板轮盘与效率工具。", shifted({36, 234, layout.card.width - 72, 38}, scroll));
-    draw_line_icon(target, IconKind::user, shifted({38, 292, 26, 26}, scroll), glow_brush_.Get());
-    draw_text(target, body_format_.Get(), text_brush_.Get(), L"开发者：  wet86y", shifted({78, 282, 360, 46}, scroll));
-    draw_line_icon(target, IconKind::repository, shifted({38, 354, 26, 26}, scroll), glow_brush_.Get());
-    draw_text(target, body_format_.Get(), text_brush_.Get(), L"GitHub 历史：", shifted({78, 344, 112, 46}, scroll));
-    draw_line_icon(target, IconKind::info, shifted({38, 420, 26, 26}, scroll), glow_brush_.Get());
-    draw_text(target, body_format_.Get(), text_brush_.Get(), L"当前版本：", shifted({78, 408, 200, 34}, scroll));
-    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), L"2.0.0（原生迁移内部构建）", shifted({78, 442, 360, 34}, scroll));
+        L"轻量级 Windows 剪贴板轮盘与效率工具。", shifted({36, 356, layout.card.width - 72, 38}, scroll));
+    draw_line_icon(target, IconKind::user, shifted({38, 398, 26, 26}, scroll), glow_brush_.Get());
+    draw_text(target, body_format_.Get(), text_brush_.Get(), L"开发者：  wet86y", shifted({78, 388, 360, 46}, scroll));
+    draw_line_icon(target, IconKind::repository, shifted({38, 462, 26, 26}, scroll), glow_brush_.Get());
+    draw_text(target, body_format_.Get(), text_brush_.Get(), L"GitHub 历史：", shifted({78, 452, 112, 46}, scroll));
+    draw_line_icon(target, IconKind::info, shifted({38, 522, 26, 26}, scroll), glow_brush_.Get());
+    draw_text(target, body_format_.Get(), text_brush_.Get(), L"当前版本：", shifted({78, 510, 200, 34}, scroll));
+    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), version_text_, shifted({78, 544, 420, 34}, scroll));
+}
+
+void SettingsWindow::apply_update_state(const smk::updater::UpdateViewState& state) {
+    update_state_ = state;
+    Button_SetCheck(about_acceleration_, state.acceleration ? BST_CHECKED : BST_UNCHECKED);
+    set_switch_value(about_acceleration_, state.acceleration);
+    refresh_update_controls();
+    InvalidateRect(pages_[2], nullptr, FALSE);
+}
+
+void SettingsWindow::refresh_update_controls() {
+    if (!about_check_update_) return;
+    using smk::updater::UpdateState;
+    const bool enabled = update_state_.state != UpdateState::disabled;
+    const bool busy = update_state_.state == UpdateState::downloading || update_state_.state == UpdateState::paused;
+    const bool available = update_state_.state == UpdateState::available;
+    const bool completed = update_state_.state == UpdateState::completed;
+    const bool checking = update_state_.state == UpdateState::checking;
+    ShowWindow(about_check_update_, busy || completed ? SW_HIDE : SW_SHOW);
+    EnableWindow(about_check_update_, enabled && !checking);
+    SetWindowTextW(about_check_update_, checking ? L"正在检查…" : L"检查更新");
+    ShowWindow(about_install_update_, available || completed ? SW_SHOW : SW_HIDE);
+    EnableWindow(about_install_update_, enabled && (available || completed));
+    SetWindowTextW(about_install_update_, completed ? L"立即安装" : L"下载更新");
+    for (auto control : {about_pause_resume_, about_background_, about_cancel_}) ShowWindow(control, busy ? SW_SHOW : SW_HIDE);
+    ShowWindow(about_switch_node_, busy && update_state_.acceleration ? SW_SHOW : SW_HIDE);
+    SetWindowTextW(about_pause_resume_, update_state_.state == UpdateState::paused ? L"继续下载" : L"暂停下载");
+    EnableWindow(about_pause_resume_, enabled && busy);
+    EnableWindow(about_background_, enabled && busy);
+    EnableWindow(about_switch_node_, enabled && busy && update_state_.acceleration);
+    EnableWindow(about_cancel_, enabled && busy);
+    EnableWindow(about_acceleration_, enabled && !checking);
 }
 
 void SettingsWindow::paint_scrollbar(ID2D1RenderTarget* target, int page_index, double width, double height) {

@@ -1,4 +1,5 @@
 #include "platform/windows/DiagnosticLog.h"
+#include "Version.h"
 
 #include <windows.h>
 
@@ -151,7 +152,8 @@ void diagnostic_initialize() noexcept {
         GetModuleFileNameW(nullptr, module, static_cast<DWORD>(std::size(module)));
         const auto process_name = std::filesystem::path(module).filename().wstring();
         diagnostic_event("session.start", std::format(
-            L"version=2.0.0 diagnostics=RelWithDebInfo process={} pid={} system_dpi={} virtual_screen=[{},{},{},{}] displays={}",
+            L"version={} diagnostics=RelWithDebInfo process={} pid={} system_dpi={} virtual_screen=[{},{},{},{}] displays={}",
+            smk::app::kVersionText,
             process_name, GetCurrentProcessId(), GetDpiForSystem(),
             GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
             GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN), display_summary()));

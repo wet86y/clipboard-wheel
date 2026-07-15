@@ -6,6 +6,7 @@
 #include "platform/windows/HotkeyCodec.h"
 #include "platform/windows/ShortcutDropTarget.h"
 #include "ui/SettingsVisualLayout.h"
+#include "updater/UpdateTypes.h"
 
 #include <windows.h>
 #include <d2d1.h>
@@ -24,7 +25,8 @@ public:
     using SaveCallback = std::function<bool(const smk::core::AppSettings&)>;
 
     ~SettingsWindow();
-    bool create(HINSTANCE instance, SaveCallback save);
+    bool create(HINSTANCE instance, SaveCallback save, smk::updater::UpdateController* update_controller,
+        std::wstring version_text);
     void show(const smk::core::AppSettings& settings);
 
 private:
@@ -99,6 +101,8 @@ private:
     void accept_shortcut_path(const std::wstring& path);
     void start_shortcut_drop_handoff();
     void poll_shortcut_drop_handoff();
+    void apply_update_state(const smk::updater::UpdateViewState& state);
+    void refresh_update_controls();
 
     void paint_window();
     void paint_page(HWND page, int page_index);
@@ -165,6 +169,11 @@ private:
 
     HWND about_check_update_ = nullptr;
     HWND about_install_update_ = nullptr;
+    HWND about_pause_resume_ = nullptr;
+    HWND about_background_ = nullptr;
+    HWND about_switch_node_ = nullptr;
+    HWND about_cancel_ = nullptr;
+    HWND about_acceleration_ = nullptr;
     HWND repository_link_ = nullptr;
 
     int selected_slot_ = 0;
@@ -188,12 +197,15 @@ private:
         ULONGLONG started_at = 0;
         bool active = false;
     };
-    std::array<SwitchAnimation, 5> switch_animations_{};
+    std::array<SwitchAnimation, 6> switch_animations_{};
     smk::core::AppSettings settings_{};
     smk::core::ExtendedWheelVisualLayout preview_visual_layout_{};
     smk::core::VisualPoint preview_surface_center_{};
     double preview_scale_ = 1.0;
     SaveCallback save_{};
+    smk::updater::UpdateController* update_controller_ = nullptr;
+    smk::updater::UpdateViewState update_state_{};
+    std::wstring version_text_ = L"2.0.0";
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2d_factory_;
     Microsoft::WRL::ComPtr<IDWriteFactory> dwrite_factory_;
