@@ -26,6 +26,30 @@ if (-not (Test-Path -LiteralPath $NativeExePath -PathType Leaf)) {
 }
 $NativeExe = Get-Item -LiteralPath $NativeExePath
 
+$ExecutableBytes = [IO.File]::ReadAllBytes($NativeExe.FullName)
+$ExecutableAscii = [Text.Encoding]::ASCII.GetString($ExecutableBytes)
+$ExecutableUnicode = [Text.Encoding]::Unicode.GetString($ExecutableBytes)
+$DiagnosticTokens = @(
+    "--diagnostic-crash-test",
+    "--update-test-repository",
+    "native-diagnostic-",
+    "super-middle-key-native-startup.log",
+    "DUK_KEEP_TRANSACTION"
+)
+if ($Configuration -eq "Release") {
+    foreach ($token in $DiagnosticTokens) {
+        if ($ExecutableAscii.Contains($token) -or $ExecutableUnicode.Contains($token)) {
+            throw "Release contains a diagnostic-only token: $token"
+        }
+    }
+} elseif ($Configuration -eq "RelWithDebInfo") {
+    foreach ($token in @("--diagnostic-crash-test", "--update-test-repository", "native-diagnostic-", "DUK_KEEP_TRANSACTION")) {
+        if (-not $ExecutableAscii.Contains($token) -and -not $ExecutableUnicode.Contains($token)) {
+            throw "RelWithDebInfo is missing diagnostic capability: $token"
+        }
+    }
+}
+
 $VersionInfo = $NativeExe.VersionInfo
 if ($VersionInfo.FileDescription -ne $NativeExe.BaseName) {
     throw "Native FileDescription does not match the executable name: $($VersionInfo.FileDescription)"

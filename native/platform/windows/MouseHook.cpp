@@ -423,7 +423,7 @@ bool MouseHook::install_hook() noexcept {
     if (success) {
         retry_index_ = 0;
         next_retry_tick_ = 0;
-        startup_trace(L"mouse hook installed on dedicated thread");
+        SMK_STARTUP_TRACE(L"mouse hook installed on dedicated thread");
         SMK_DIAGNOSTIC_EVENT("input.hook.install", L"success=true");
     } else {
         const DWORD error = GetLastError();
@@ -501,7 +501,7 @@ void MouseHook::publish_state() noexcept {
     generation_.store(state_.generation(), std::memory_order_release);
     capture_ready_.store(state_.capture_ready(), std::memory_order_release);
     session_active_.store(state_.wheel_active(), std::memory_order_release);
-    crash_set_input_state(available_.load(std::memory_order_acquire),
+    SMK_CRASH_INPUT_STATE(available_.load(std::memory_order_acquire),
         state_.capture_ready(), state_.generation());
 }
 

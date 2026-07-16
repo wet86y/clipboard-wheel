@@ -51,11 +51,24 @@ target_include_directories(super_middle_key_core PUBLIC "${CMAKE_CURRENT_SOURCE_
 target_compile_definitions(super_middle_key_core PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(super_middle_key_core PRIVATE /W4 /permissive- /utf-8 /EHsc)
 
+# This interface contributes implementation sources only to RelWithDebInfo executables.
+# Release callers resolve to inline no-ops and never compile or link the diagnostic sources.
+add_library(super_middle_key_diagnostics INTERFACE)
+target_sources(super_middle_key_diagnostics INTERFACE
+    $<$<CONFIG:RelWithDebInfo>:${CMAKE_CURRENT_SOURCE_DIR}/platform/windows/CrashHandler.cpp>
+    $<$<CONFIG:RelWithDebInfo>:${CMAKE_CURRENT_SOURCE_DIR}/platform/windows/DiagnosticLog.cpp>
+    $<$<CONFIG:RelWithDebInfo>:${CMAKE_CURRENT_SOURCE_DIR}/platform/windows/StartupTrace.cpp>
+)
+target_include_directories(super_middle_key_diagnostics INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${SMK_GENERATED_DIR}")
+target_compile_definitions(super_middle_key_diagnostics INTERFACE
+    $<$<CONFIG:RelWithDebInfo>:SMK_DIAGNOSTICS=1>)
+target_link_libraries(super_middle_key_diagnostics INTERFACE
+    $<$<CONFIG:RelWithDebInfo>:dbghelp> $<$<CONFIG:RelWithDebInfo>:user32>)
+
 add_library(super_middle_key_windows STATIC
     platform/windows/AutoStart.cpp
     platform/windows/ClipboardService.cpp
-    platform/windows/CrashHandler.cpp
-    platform/windows/DiagnosticLog.cpp
     platform/windows/ElevationService.cpp
     platform/windows/ExtendedActionExecutor.cpp
     platform/windows/HotkeyCaptureHook.cpp
@@ -67,17 +80,16 @@ add_library(super_middle_key_windows STATIC
     platform/windows/ShortcutDropTarget.cpp
     platform/windows/ShortcutDropHelper.cpp
     platform/windows/SingleInstance.cpp
-    platform/windows/StartupTrace.cpp
     platform/windows/TrayIcon.cpp
     platform/windows/WindowsClipboardHistory.cpp
 )
 target_include_directories(super_middle_key_windows PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${SMK_GENERATED_DIR}")
 target_compile_definitions(super_middle_key_windows PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_compile_definitions(super_middle_key_windows PUBLIC $<$<CONFIG:RelWithDebInfo>:SMK_DIAGNOSTICS=1>)
+target_compile_definitions(super_middle_key_windows PRIVATE $<$<CONFIG:RelWithDebInfo>:SMK_DIAGNOSTICS=1>)
 target_compile_options(super_middle_key_windows PRIVATE /W4 /permissive- /utf-8 /EHsc)
 target_link_libraries(super_middle_key_windows
     PUBLIC super_middle_key_core
-    PRIVATE advapi32 bcrypt d2d1 dbghelp dwrite dwmapi gdi32 gdiplus ole32 oleaut32 runtimeobject shell32 shlwapi
+    PRIVATE advapi32 bcrypt d2d1 dwrite dwmapi gdi32 gdiplus ole32 oleaut32 runtimeobject shell32 shlwapi
         uiautomationcore user32 userenv windowscodecs wtsapi32
 )
 
@@ -97,6 +109,7 @@ add_library(super_middle_key_updater STATIC
 )
 target_include_directories(super_middle_key_updater PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${SMK_GENERATED_DIR}")
 target_compile_definitions(super_middle_key_updater PUBLIC UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_definitions(super_middle_key_updater PRIVATE $<$<CONFIG:RelWithDebInfo>:SMK_DIAGNOSTICS=1>)
 target_compile_options(super_middle_key_updater PRIVATE /W4 /permissive- /utf-8 /EHsc)
 target_link_libraries(super_middle_key_updater PUBLIC desktop_update_kit_native)
 
@@ -116,7 +129,7 @@ target_compile_options(super_middle_key_native PRIVATE /W4 /permissive- /utf-8 /
 target_link_options(super_middle_key_native PRIVATE /MANIFEST:NO)
 target_include_directories(super_middle_key_native PRIVATE "${SMK_GENERATED_DIR}")
 target_link_libraries(super_middle_key_native
-    PRIVATE super_middle_key_core super_middle_key_windows super_middle_key_ui super_middle_key_updater ole32 shell32 user32
+    PRIVATE super_middle_key_diagnostics super_middle_key_core super_middle_key_windows super_middle_key_ui super_middle_key_updater ole32 shell32 user32
 )
 
 include(CTest)
@@ -126,7 +139,7 @@ if(BUILD_TESTING)
     )
     target_compile_definitions(super_middle_key_native_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(super_middle_key_native_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
-    target_link_libraries(super_middle_key_native_tests PRIVATE super_middle_key_core super_middle_key_updater)
+    target_link_libraries(super_middle_key_native_tests PRIVATE super_middle_key_diagnostics super_middle_key_core super_middle_key_updater)
     add_test(NAME native_core COMMAND super_middle_key_native_tests)
 
     add_executable(super_middle_key_native_windows_tests
@@ -134,23 +147,25 @@ if(BUILD_TESTING)
     )
     target_compile_definitions(super_middle_key_native_windows_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(super_middle_key_native_windows_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
-    target_link_libraries(super_middle_key_native_windows_tests PRIVATE super_middle_key_windows ole32 user32)
+    target_link_libraries(super_middle_key_native_windows_tests PRIVATE super_middle_key_diagnostics super_middle_key_windows ole32 user32)
     add_test(NAME native_windows_clipboard COMMAND super_middle_key_native_windows_tests)
 
     add_executable(super_middle_key_native_wheel_tests
         tests/WheelWindowTests.cpp
     )
     target_compile_definitions(super_middle_key_native_wheel_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_definitions(super_middle_key_native_wheel_tests PRIVATE $<$<CONFIG:RelWithDebInfo>:SMK_DIAGNOSTICS=1>)
     target_compile_options(super_middle_key_native_wheel_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
-    target_link_libraries(super_middle_key_native_wheel_tests PRIVATE super_middle_key_ui ole32 user32)
+    target_link_libraries(super_middle_key_native_wheel_tests PRIVATE super_middle_key_diagnostics super_middle_key_ui ole32 user32)
     add_test(NAME native_wheel_window COMMAND super_middle_key_native_wheel_tests)
 
     add_executable(super_middle_key_native_diagnostic_tests
         tests/DiagnosticLogTests.cpp
     )
     target_compile_definitions(super_middle_key_native_diagnostic_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_definitions(super_middle_key_native_diagnostic_tests PRIVATE $<$<CONFIG:RelWithDebInfo>:SMK_DIAGNOSTICS=1>)
     target_compile_options(super_middle_key_native_diagnostic_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
-    target_link_libraries(super_middle_key_native_diagnostic_tests PRIVATE super_middle_key_windows)
+    target_link_libraries(super_middle_key_native_diagnostic_tests PRIVATE super_middle_key_diagnostics super_middle_key_windows)
     add_test(NAME native_diagnostic_log COMMAND super_middle_key_native_diagnostic_tests)
 
     add_executable(super_middle_key_native_settings_tests
@@ -158,7 +173,7 @@ if(BUILD_TESTING)
     )
     target_compile_definitions(super_middle_key_native_settings_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(super_middle_key_native_settings_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
-    target_link_libraries(super_middle_key_native_settings_tests PRIVATE super_middle_key_ui ole32 user32)
+    target_link_libraries(super_middle_key_native_settings_tests PRIVATE super_middle_key_diagnostics super_middle_key_ui ole32 user32)
     add_test(NAME native_settings_window COMMAND super_middle_key_native_settings_tests)
 
     add_executable(super_middle_key_native_settings_store_tests
@@ -166,6 +181,6 @@ if(BUILD_TESTING)
     )
     target_compile_definitions(super_middle_key_native_settings_store_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(super_middle_key_native_settings_store_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
-    target_link_libraries(super_middle_key_native_settings_store_tests PRIVATE super_middle_key_windows runtimeobject)
+    target_link_libraries(super_middle_key_native_settings_store_tests PRIVATE super_middle_key_diagnostics super_middle_key_windows runtimeobject)
     add_test(NAME native_settings_store COMMAND super_middle_key_native_settings_store_tests)
 endif()

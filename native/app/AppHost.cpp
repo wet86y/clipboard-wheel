@@ -53,9 +53,6 @@ int AppHost::run(HINSTANCE instance, const std::vector<std::wstring>& arguments)
             return smk::windows::run_shortcut_drop_helper(instance, arguments[index + 1]);
     }
     if (has_argument(arguments, L"--verify-release")) return verify_release_bundle(instance);
-#if !defined(SMK_DIAGNOSTICS)
-    if (has_argument(arguments, L"--update-test-repository")) return 4;
-#endif
     if (!initialize(instance, arguments)) return startup_exit_requested_ ? 0 : 1;
     (void)write_update_health_marker(arguments);
     MSG message{};
@@ -65,43 +62,43 @@ int AppHost::run(HINSTANCE instance, const std::vector<std::wstring>& arguments)
         DispatchMessageW(&message);
     }
     if (get_message == -1)
-        smk::windows::startup_trace(L"main GetMessage failed error=" + std::to_wstring(GetLastError()));
+        SMK_STARTUP_TRACE(L"main GetMessage failed error=" + std::to_wstring(GetLastError()));
     shutdown();
     return get_message == -1 ? 2 : static_cast<int>(message.wParam);
 }
 
 bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& arguments) {
     smk::windows::crash_set_phase(L"app_initialize");
-    smk::windows::startup_trace(L"initialize begin");
+    SMK_STARTUP_TRACE(L"initialize begin");
     instance_ = instance;
     const bool takeover = has_argument(arguments, L"--admin-restart");
     if (!single_instance_.acquire(L"Local\\SuperMiddleKey.SingleInstance", takeover)) {
-        smk::windows::startup_trace(L"single instance rejected");
+        SMK_STARTUP_TRACE(L"single instance rejected");
         return false;
     }
-    smk::windows::startup_trace(L"single instance acquired");
+    SMK_STARTUP_TRACE(L"single instance acquired");
 
     std::wstring executable_name_error;
     const auto executable = std::filesystem::path(executable_path());
     const auto normalization = smk::updater::normalize_executable_name(
         instance, executable, L"超级中键.exe", executable_name_error);
     if (normalization == smk::updater::ExecutableNameNormalizationResult::relaunch_started) {
-        smk::windows::startup_trace(L"canonical executable name relaunch started");
+        SMK_STARTUP_TRACE(L"canonical executable name relaunch started");
         startup_exit_requested_ = true;
         return false;
     }
     if (normalization == smk::updater::ExecutableNameNormalizationResult::failed) {
-        smk::windows::startup_trace(L"canonical executable name normalization skipped: " + executable_name_error);
+        SMK_STARTUP_TRACE(L"canonical executable name normalization skipped: " + executable_name_error);
     }
 
     settings_ = settings_store_.load();
-    smk::windows::startup_trace(L"settings loaded");
+    SMK_STARTUP_TRACE(L"settings loaded");
     enabled_ = settings_.mouse.middle_button_capture_enabled;
     if (!wheel_.create(instance)) {
-        smk::windows::startup_trace(L"wheel create failed HRESULT=" + std::to_wstring(static_cast<unsigned long>(wheel_.creation_error())));
+        SMK_STARTUP_TRACE(L"wheel create failed HRESULT=" + std::to_wstring(static_cast<unsigned long>(wheel_.creation_error())));
         return false;
     }
-    smk::windows::startup_trace(L"wheel created");
+    SMK_STARTUP_TRACE(L"wheel created");
     wheel_.set_failure_callback([this] {
         if (mouse_hook_) mouse_hook_->cancel_session(mouse_hook_->generation());
         cancel_wheel_no_action();
@@ -119,42 +116,42 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
     if (!settings_window_.create(instance,
             [this](const smk::core::AppSettings& settings) { return save_settings(settings); },
             updater_.get(), std::wstring(kVersionText))) {
-        smk::windows::startup_trace(L"settings window create failed");
+        SMK_STARTUP_TRACE(L"settings window create failed");
         return false;
     }
-    smk::windows::startup_trace(L"settings window created");
+    SMK_STARTUP_TRACE(L"settings window created");
     if (!create_input_safety_window()) {
-        smk::windows::startup_trace(L"input safety window create failed");
+        SMK_STARTUP_TRACE(L"input safety window create failed");
         return false;
     }
 
     clipboard_ = std::make_unique<smk::windows::ClipboardService>(history_, [] {}, settings_.clipboard.capture_images);
     if (!clipboard_->start(instance)) {
-        smk::windows::startup_trace(L"clipboard listener start failed");
+        SMK_STARTUP_TRACE(L"clipboard listener start failed");
         return false;
     }
-    smk::windows::startup_trace(L"clipboard listener started");
+    SMK_STARTUP_TRACE(L"clipboard listener started");
     clipboard_->capture_current();
-    smk::windows::startup_trace(L"initial clipboard captured");
+    SMK_STARTUP_TRACE(L"initial clipboard captured");
     windows_history_ = std::make_unique<smk::windows::WindowsClipboardHistory>(history_, [] {});
     if (settings_.clipboard.load_windows_clipboard_history_on_startup) {
         (void)windows_history_->start(instance, static_cast<std::size_t>(settings_.clipboard.max_history_items), settings_.clipboard.capture_images);
     }
-    smk::windows::startup_trace(L"WinRT history scheduled");
+    SMK_STARTUP_TRACE(L"WinRT history scheduled");
     extended_actions_ = std::make_unique<smk::windows::ExtendedActionExecutor>();
     if (!extended_actions_->start()) {
-        smk::windows::startup_trace(L"extended action executor start failed");
+        SMK_STARTUP_TRACE(L"extended action executor start failed");
         return false;
     }
 
     mouse_hook_ = std::make_unique<smk::windows::MouseHook>(input_window_);
     mouse_hook_->set_enabled(enabled_);
     if (!mouse_hook_->start()) {
-        smk::windows::startup_trace(L"mouse hook thread start failed; capture unavailable");
+        SMK_STARTUP_TRACE(L"mouse hook thread start failed; capture unavailable");
         mouse_hook_.reset();
     } else {
         mouse_hook_->heartbeat();
-        smk::windows::startup_trace(L"mouse hook thread started");
+        SMK_STARTUP_TRACE(L"mouse hook thread started");
     }
 
     smk::windows::TrayIcon::Callbacks tray_callbacks;
@@ -163,11 +160,11 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
     tray_callbacks.clear_history = [this] { history_.clear(); };
     tray_callbacks.exit = [] { PostQuitMessage(0); };
     if (!tray_.create(instance, std::move(tray_callbacks))) {
-        smk::windows::startup_trace(L"tray create failed");
+        SMK_STARTUP_TRACE(L"tray create failed");
         return false;
     }
     tray_.set_enabled(enabled_);
-    smk::windows::startup_trace(L"initialize complete");
+    SMK_STARTUP_TRACE(L"initialize complete");
     smk::windows::crash_set_phase(L"app_running");
     return true;
 }
@@ -176,7 +173,7 @@ void AppHost::shutdown() {
     if (shutting_down_) return;
     shutting_down_ = true;
     smk::windows::crash_set_phase(L"app_shutdown");
-    smk::windows::startup_trace(L"shutdown begin");
+    SMK_STARTUP_TRACE(L"shutdown begin");
     const ULONGLONG shutdown_deadline = GetTickCount64() + 5000;
     const auto remaining_shutdown_ms = [&]() -> DWORD {
         const ULONGLONG now = GetTickCount64();
@@ -187,7 +184,7 @@ void AppHost::shutdown() {
         mouse_hook_->set_enabled(false);
         if (mouse_hook_->stop(remaining_shutdown_ms())) mouse_hook_.reset();
         else {
-            smk::windows::startup_trace(L"mouse hook stop timed out; retaining isolated worker state until process exit");
+            SMK_STARTUP_TRACE(L"mouse hook stop timed out; retaining isolated worker state until process exit");
             (void)mouse_hook_.release();
         }
     }
@@ -200,7 +197,7 @@ void AppHost::shutdown() {
     if (updater_) {
         if (updater_->shutdown(remaining_shutdown_ms())) updater_.reset();
         else {
-            smk::windows::startup_trace(L"update worker stop timed out; retaining isolated worker state until process exit");
+            SMK_STARTUP_TRACE(L"update worker stop timed out; retaining isolated worker state until process exit");
             (void)updater_.release();
         }
     }
@@ -210,7 +207,7 @@ void AppHost::shutdown() {
     }
     clipboard_.reset();
     tray_.destroy();
-    smk::windows::startup_trace(L"shutdown complete");
+    SMK_STARTUP_TRACE(L"shutdown complete");
 }
 
 bool AppHost::create_input_safety_window() {

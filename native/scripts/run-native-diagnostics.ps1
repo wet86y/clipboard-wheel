@@ -12,9 +12,12 @@ if (-not $NoBuild) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-$Executable = Get-ChildItem -LiteralPath $DiagnosticBin -Filter "*.exe" -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -notmatch "_tests\.exe$" } |
-    Select-Object -First 1
+$ExecutablePath = Join-Path $DiagnosticBin "超级中键.exe"
+$Executable = if (Test-Path -LiteralPath $ExecutablePath) {
+    Get-Item -LiteralPath $ExecutablePath
+} else {
+    $null
+}
 if ($null -eq $Executable) {
     throw "Diagnostic executable was not found under: $DiagnosticBin"
 }
