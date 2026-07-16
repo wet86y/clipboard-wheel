@@ -297,14 +297,15 @@ std::optional<smk::core::ClipboardEntry> ClipboardService::create_entry_from_dat
         || contains_ignore_case(entry.html_text, L"<table");
     entry.looks_like_single_cell = !entry.plain_text.empty() && entry.plain_text.find_first_of(L"\t\r\n") == std::wstring::npos;
     if (capture_images && !entry.looks_like_spreadsheet) {
-        if (const auto image = read_image_payload(data)) {
+        if (auto image = read_image_payload(data)) {
             entry.image_png_bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(image->png));
             entry.preview_image_png_bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(image->preview_png));
             entry.image_hash = image->sha256;
             entry.image_width = image->width;
             entry.image_height = image->height;
             SMK_DIAGNOSTIC_EVENT("clipboard.image_capture", std::format(L"width={} height={} png_bytes={} preview_bytes={}",
-                image->width, image->height, image->png.size(), image->preview_png.size()));
+                image->width, image->height, entry.image_png_bytes->size(),
+                entry.preview_image_png_bytes->size()));
         }
     }
     entry.is_image_content = should_capture_as_image(entry);
