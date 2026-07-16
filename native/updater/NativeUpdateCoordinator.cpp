@@ -8,12 +8,66 @@ namespace smk::updater {
 namespace {
 constexpr int kUpdaterStubResource = 201;
 
+std::vector<std::byte> load_updater_stub(HINSTANCE instance) {
+    HRSRC resource = FindResourceW(instance, MAKEINTRESOURCEW(kUpdaterStubResource), RT_RCDATA);
+    if (!resource) return {};
+    HGLOBAL loaded = LoadResource(instance, resource);
+    const DWORD size = SizeofResource(instance, resource);
+    const auto* bytes = static_cast<const std::byte*>(LockResource(loaded));
+    return bytes && size ? std::vector<std::byte>(bytes, bytes + size) : std::vector<std::byte>{};
+}
+
+std::wstring widen_utf8(const std::string& text) {
+    if (text.empty()) return {};
+    const int count = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    std::wstring result(static_cast<std::size_t>(std::max(0, count)), L'\0');
+    if (count) MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), count);
+    return result;
+}
+
 std::wstring format_bytes(double value) {
     constexpr const wchar_t* units[]{L"B", L"KiB", L"MiB", L"GiB"};
     std::size_t unit{};
     while (value >= 1024.0 && unit + 1 < std::size(units)) { value /= 1024.0; ++unit; }
     return std::format(L"{:.1f} {}", value, units[unit]);
 }
+}
+
+std::optional<std::filesystem::path> canonical_executable_target(
+    const std::filesystem::path& executable, const std::wstring& canonical_file_name) {
+    if (!executable.is_absolute() || canonical_file_name.empty()) return {};
+    const std::filesystem::path canonical(canonical_file_name);
+    if (canonical.has_parent_path() || canonical.filename() != canonical
+        || _wcsicmp(canonical.extension().c_str(), L".exe") != 0
+        || _wcsicmp(executable.filename().c_str(), canonical_file_name.c_str()) == 0) return {};
+    return executable.parent_path() / canonical;
+}
+
+ExecutableNameNormalizationResult normalize_executable_name(
+    HINSTANCE instance, const std::filesystem::path& executable,
+    const std::wstring& canonical_file_name, std::wstring& error) {
+    try {
+        const auto target = canonical_executable_target(executable, canonical_file_name);
+        if (!target) return ExecutableNameNormalizationResult::unchanged;
+        const auto stub = load_updater_stub(instance);
+        if (stub.empty()) {
+            error = L"内嵌更新替换组件不可用。";
+            return ExecutableNameNormalizationResult::failed;
+        }
+        const auto result = desktop_update_kit::launch_rename(
+            stub, executable, *target, static_cast<int>(GetCurrentProcessId()));
+        if (!result.started) {
+            error = widen_utf8(result.error);
+            return ExecutableNameNormalizationResult::failed;
+        }
+        return ExecutableNameNormalizationResult::relaunch_started;
+    } catch (const std::exception& exception) {
+        error = widen_utf8(exception.what());
+        return ExecutableNameNormalizationResult::failed;
+    } catch (...) {
+        error = L"无法恢复程序文件名。";
+        return ExecutableNameNormalizationResult::failed;
+    }
 }
 
 NativeUpdateCoordinator::NativeUpdateCoordinator(HINSTANCE instance, std::filesystem::path executable,
@@ -198,20 +252,11 @@ void NativeUpdateCoordinator::apply_snapshot(const desktop_update_kit::SessionSn
 }
 
 std::vector<std::byte> NativeUpdateCoordinator::updater_stub() const {
-    HRSRC resource = FindResourceW(instance_, MAKEINTRESOURCEW(kUpdaterStubResource), RT_RCDATA);
-    if (!resource) return {};
-    HGLOBAL loaded = LoadResource(instance_, resource);
-    const DWORD size = SizeofResource(instance_, resource);
-    const auto* bytes = static_cast<const std::byte*>(LockResource(loaded));
-    return bytes && size ? std::vector<std::byte>(bytes, bytes + size) : std::vector<std::byte>{};
+    return load_updater_stub(instance_);
 }
 
 std::wstring NativeUpdateCoordinator::widen(const std::string& text) {
-    if (text.empty()) return {};
-    const int count = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    std::wstring result(static_cast<std::size_t>(std::max(0, count)), L'\0');
-    if (count) MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), count);
-    return result;
+    return widen_utf8(text);
 }
 
 void NativeUpdateCoordinator::shutdown() {

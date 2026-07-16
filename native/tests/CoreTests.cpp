@@ -6,10 +6,12 @@
 #include "core/WheelLayout.h"
 #include "core/WheelInteraction.h"
 #include "core/WheelVisualGeometry.h"
+#include "updater/NativeUpdateCoordinator.h"
 #include "updater/UpdatePolicy.h"
 
 #include <cstdlib>
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -257,6 +259,19 @@ void paste_tests() {
 } // namespace
 
 int main() {
+    const auto executable_directory = std::filesystem::temp_directory_path() / L"超级中键 名称测试";
+    const auto english_executable = std::filesystem::absolute(executable_directory / L"super-middle-key.exe");
+    const auto canonical_target = smk::updater::canonical_executable_target(
+        english_executable, L"超级中键.exe");
+    expect(canonical_target == executable_directory / L"超级中键.exe",
+        "an English release asset is redirected to the canonical Chinese executable name");
+    expect(!smk::updater::canonical_executable_target(
+        executable_directory / L"超级中键.EXE", L"超级中键.exe"),
+        "canonical executable name comparison is case insensitive");
+    expect(!smk::updater::canonical_executable_target(
+        english_executable, L"nested\\超级中键.exe"),
+        "canonical executable name rejects directory traversal");
+
     expect(smk::updater::production_update_ui_enabled,
         "production native builds expose the updater UI");
     settings_tests();

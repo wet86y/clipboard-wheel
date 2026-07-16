@@ -56,7 +56,7 @@ int AppHost::run(HINSTANCE instance, const std::vector<std::wstring>& arguments)
 #if !defined(SMK_DIAGNOSTICS)
     if (has_argument(arguments, L"--update-test-repository")) return 4;
 #endif
-    if (!initialize(instance, arguments)) return 1;
+    if (!initialize(instance, arguments)) return startup_exit_requested_ ? 0 : 1;
     (void)write_update_health_marker(arguments);
     MSG message{};
     BOOL get_message = FALSE;
@@ -80,6 +80,19 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
         return false;
     }
     smk::windows::startup_trace(L"single instance acquired");
+
+    std::wstring executable_name_error;
+    const auto executable = std::filesystem::path(executable_path());
+    const auto normalization = smk::updater::normalize_executable_name(
+        instance, executable, L"超级中键.exe", executable_name_error);
+    if (normalization == smk::updater::ExecutableNameNormalizationResult::relaunch_started) {
+        smk::windows::startup_trace(L"canonical executable name relaunch started");
+        startup_exit_requested_ = true;
+        return false;
+    }
+    if (normalization == smk::updater::ExecutableNameNormalizationResult::failed) {
+        smk::windows::startup_trace(L"canonical executable name normalization skipped: " + executable_name_error);
+    }
 
     settings_ = settings_store_.load();
     smk::windows::startup_trace(L"settings loaded");

@@ -15,6 +15,18 @@
 
 namespace smk::updater {
 
+enum class ExecutableNameNormalizationResult {
+    unchanged,
+    relaunch_started,
+    failed,
+};
+
+std::optional<std::filesystem::path> canonical_executable_target(
+    const std::filesystem::path& executable, const std::wstring& canonical_file_name);
+ExecutableNameNormalizationResult normalize_executable_name(
+    HINSTANCE instance, const std::filesystem::path& executable,
+    const std::wstring& canonical_file_name, std::wstring& error);
+
 class NativeUpdateCoordinator final : public UpdateController {
 public:
     using ExitCallback = std::function<void()>;

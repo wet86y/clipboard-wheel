@@ -63,6 +63,7 @@ private:
     bool enabled_ = true;
     bool lock_changed_ = false;
     bool shutting_down_ = false;
+    bool startup_exit_requested_ = false;
     bool hook_unavailable_notified_ = false;
 };
 

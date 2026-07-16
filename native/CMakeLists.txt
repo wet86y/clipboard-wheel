@@ -126,7 +126,7 @@ if(BUILD_TESTING)
     )
     target_compile_definitions(super_middle_key_native_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(super_middle_key_native_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
-    target_link_libraries(super_middle_key_native_tests PRIVATE super_middle_key_core)
+    target_link_libraries(super_middle_key_native_tests PRIVATE super_middle_key_core super_middle_key_updater)
     add_test(NAME native_core COMMAND super_middle_key_native_tests)
 
     add_executable(super_middle_key_native_windows_tests
