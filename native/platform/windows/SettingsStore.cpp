@@ -239,27 +239,9 @@ smk::core::AppSettings SettingsStore::load() {
 
         const auto clipboard = object_or_empty(root, L"Clipboard");
         settings.clipboard.max_history_items = integer_value(clipboard, L"MaxHistoryItems", settings.clipboard.max_history_items);
-        settings.clipboard.load_windows_clipboard_history_on_startup = bool_value(clipboard, L"LoadWindowsClipboardHistoryOnStartup", settings.clipboard.load_windows_clipboard_history_on_startup);
-        settings.clipboard.capture_plain_text = bool_value(clipboard, L"CapturePlainText", settings.clipboard.capture_plain_text);
-        settings.clipboard.capture_html = bool_value(clipboard, L"CaptureHtml", settings.clipboard.capture_html);
-        settings.clipboard.capture_rtf = bool_value(clipboard, L"CaptureRtf", settings.clipboard.capture_rtf);
-        settings.clipboard.capture_csv = bool_value(clipboard, L"CaptureCsv", settings.clipboard.capture_csv);
         settings.clipboard.capture_images = bool_value(clipboard, L"CaptureImages", settings.clipboard.capture_images);
-        settings.clipboard.ignore_password_like_text = bool_value(clipboard, L"IgnorePasswordLikeText", settings.clipboard.ignore_password_like_text);
         const auto mouse = object_or_empty(root, L"Mouse");
-        settings.mouse.default_capture_mode = string_value(mouse, L"DefaultCaptureMode", settings.mouse.default_capture_mode);
-        settings.mouse.trigger_button = string_value(mouse, L"TriggerButton", settings.mouse.trigger_button);
-        settings.mouse.long_press_threshold_ms = integer_value(mouse, L"LongPressThresholdMs", settings.mouse.long_press_threshold_ms);
         settings.mouse.middle_button_capture_enabled = bool_value(mouse, L"MiddleButtonCaptureEnabled", settings.mouse.middle_button_capture_enabled);
-        settings.mouse.suppress_original_middle_click = bool_value(mouse, L"SuppressOriginalMiddleClick", settings.mouse.suppress_original_middle_click);
-        settings.mouse.cancel_when_release_in_dead_zone = bool_value(mouse, L"CancelWhenReleaseInDeadZone", settings.mouse.cancel_when_release_in_dead_zone);
-        const auto paste = object_or_empty(root, L"Paste");
-        settings.paste.default_mode = string_value(paste, L"DefaultMode", settings.paste.default_mode);
-        settings.paste.restore_clipboard_after_paste = bool_value(paste, L"RestoreClipboardAfterPaste", settings.paste.restore_clipboard_after_paste);
-        settings.paste.restore_delay_ms = integer_value(paste, L"RestoreDelayMs", settings.paste.restore_delay_ms);
-        settings.paste.ctrl_modifier_mode = string_value(paste, L"CtrlModifierMode", settings.paste.ctrl_modifier_mode);
-        settings.paste.shift_modifier_mode = string_value(paste, L"ShiftModifierMode", settings.paste.shift_modifier_mode);
-        settings.paste.add_paste_to_clipboard_history = bool_value(paste, L"AddPasteToClipboardHistory", settings.paste.add_paste_to_clipboard_history);
         const auto update = object_or_empty(root, L"Update");
         settings.update.use_acceleration_nodes = bool_value(update, L"UseAccelerationNodes", settings.update.use_acceleration_nodes);
 
@@ -286,17 +268,6 @@ smk::core::AppSettings SettingsStore::load() {
             }
         }
 
-        const auto process_rules_value = find_value(root, L"ProcessRules");
-        if (process_rules_value && process_rules_value->ValueType() == JsonValueType::Object) {
-            const auto rules = process_rules_value->GetObject();
-            settings.process_rules.clear();
-            for (const auto& pair : rules) {
-                if (pair.Value().ValueType() == winrt::Windows::Data::Json::JsonValueType::String) {
-                    settings.process_rules.emplace(std::wstring(pair.Key()), std::wstring(pair.Value().GetString()));
-                }
-            }
-            if (settings.process_rules.empty()) settings.process_rules.emplace(L"default", L"always");
-        }
         if (loaded_version < 3) settings.wheel.quick_copy = true;
         smk::core::normalize_settings(settings);
         std::wstring ignored;
@@ -377,42 +348,16 @@ bool SettingsStore::save(const smk::core::AppSettings& input, std::wstring& erro
 
         JsonObject clipboard;
         set(clipboard, L"MaxHistoryItems", settings.clipboard.max_history_items);
-        set(clipboard, L"LoadWindowsClipboardHistoryOnStartup", settings.clipboard.load_windows_clipboard_history_on_startup);
-        set(clipboard, L"CapturePlainText", settings.clipboard.capture_plain_text);
-        set(clipboard, L"CaptureHtml", settings.clipboard.capture_html);
-        set(clipboard, L"CaptureRtf", settings.clipboard.capture_rtf);
-        set(clipboard, L"CaptureCsv", settings.clipboard.capture_csv);
         set(clipboard, L"CaptureImages", settings.clipboard.capture_images);
-        set(clipboard, L"IgnorePasswordLikeText", settings.clipboard.ignore_password_like_text);
         set_object(root, L"Clipboard", clipboard);
 
         JsonObject mouse;
-        set(mouse, L"DefaultCaptureMode", settings.mouse.default_capture_mode);
-        set(mouse, L"TriggerButton", settings.mouse.trigger_button);
-        set(mouse, L"LongPressThresholdMs", settings.mouse.long_press_threshold_ms);
-        set(mouse, L"SuppressOriginalMiddleClick", settings.mouse.suppress_original_middle_click);
-        set(mouse, L"CancelWhenReleaseInDeadZone", settings.mouse.cancel_when_release_in_dead_zone);
         set(mouse, L"MiddleButtonCaptureEnabled", settings.mouse.middle_button_capture_enabled);
         set_object(root, L"Mouse", mouse);
-
-        JsonObject paste;
-        set(paste, L"DefaultMode", settings.paste.default_mode);
-        set(paste, L"RestoreClipboardAfterPaste", settings.paste.restore_clipboard_after_paste);
-        set(paste, L"RestoreDelayMs", settings.paste.restore_delay_ms);
-        set(paste, L"CtrlModifierMode", settings.paste.ctrl_modifier_mode);
-        set(paste, L"ShiftModifierMode", settings.paste.shift_modifier_mode);
-        set(paste, L"AddPasteToClipboardHistory", settings.paste.add_paste_to_clipboard_history);
-        set_object(root, L"Paste", paste);
 
         JsonObject update;
         set(update, L"UseAccelerationNodes", settings.update.use_acceleration_nodes);
         set_object(root, L"Update", update);
-
-        JsonObject process_rules;
-        for (const auto& [process, mode] : settings.process_rules) {
-            process_rules.SetNamedValue(process, winrt::Windows::Data::Json::JsonValue::CreateStringValue(mode));
-        }
-        set_object(root, L"ProcessRules", process_rules);
 
         std::error_code directory_error;
         std::filesystem::create_directories(directory_, directory_error);

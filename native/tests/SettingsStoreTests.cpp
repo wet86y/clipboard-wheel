@@ -55,6 +55,9 @@ void legacy_upgrade_test(const std::filesystem::path& root) {
         " {\"slotIndex\": 4, \"enabled\": true, \"name\": \"Editor\", \"mode\": \"hotkey\","
         " \"hotkey\": \"Ctrl+Alt+E\",},],},},\n"
         " \"clipboard\": {\"captureImages\": true, \"maxHistoryItems\": \"bad\",},\n"
+        " \"mouse\": {\"defaultCaptureMode\": \"always\", \"triggerButton\": \"middle\"},\n"
+        " \"paste\": {\"defaultMode\": \"smart\", \"restoreDelayMs\": 150},\n"
+        " \"processRules\": {\"default\": \"always\"},\n"
         " \"update\": {\"useAccelerationNodes\": false,},\n"
         "}\n";
     write_bytes(legacy / L"settings.json", json);
@@ -79,6 +82,10 @@ void legacy_upgrade_test(const std::filesystem::path& root) {
     expect(converted.find("\"settingsVersion\"") != std::string::npos
         && converted.find("\"SettingsVersion\"") == std::string::npos,
         "converted settings use canonical lower camel case");
+    expect(converted.find("\"defaultCaptureMode\"") == std::string::npos
+        && converted.find("\"paste\"") == std::string::npos
+        && converted.find("\"processRules\"") == std::string::npos,
+        "deprecated fixed-policy fields are accepted but not retained for downgrade");
 }
 
 void native_pascal_case_test(const std::filesystem::path& root) {

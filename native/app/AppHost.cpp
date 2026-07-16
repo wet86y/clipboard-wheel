@@ -134,9 +134,8 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
     clipboard_->capture_current();
     SMK_STARTUP_TRACE(L"initial clipboard captured");
     windows_history_ = std::make_unique<smk::windows::WindowsClipboardHistory>(history_, [] {});
-    if (settings_.clipboard.load_windows_clipboard_history_on_startup) {
-        (void)windows_history_->start(instance, static_cast<std::size_t>(settings_.clipboard.max_history_items), settings_.clipboard.capture_images);
-    }
+    (void)windows_history_->start(instance, static_cast<std::size_t>(settings_.clipboard.max_history_items),
+        settings_.clipboard.capture_images);
     SMK_STARTUP_TRACE(L"WinRT history scheduled");
     extended_actions_ = std::make_unique<smk::windows::ExtendedActionExecutor>();
     if (!extended_actions_->start()) {

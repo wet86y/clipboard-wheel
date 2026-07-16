@@ -2,7 +2,6 @@
 
 #include <array>
 #include <string>
-#include <unordered_map>
 
 namespace smk::core {
 
@@ -56,32 +55,12 @@ struct ThemeSettings {
 };
 
 struct MouseSettings {
-    std::wstring default_capture_mode = L"always";
-    std::wstring trigger_button = L"middle";
-    int long_press_threshold_ms = 120;
-    bool suppress_original_middle_click = true;
-    bool cancel_when_release_in_dead_zone = true;
     bool middle_button_capture_enabled = true;
 };
 
 struct ClipboardSettings {
     int max_history_items = 8;
-    bool load_windows_clipboard_history_on_startup = true;
-    bool capture_plain_text = true;
-    bool capture_html = true;
-    bool capture_rtf = true;
-    bool capture_csv = true;
     bool capture_images = false;
-    bool ignore_password_like_text = false;
-};
-
-struct PasteSettings {
-    std::wstring default_mode = L"smart";
-    bool restore_clipboard_after_paste = false;
-    int restore_delay_ms = 150;
-    std::wstring ctrl_modifier_mode = L"plainText";
-    std::wstring shift_modifier_mode = L"formatted";
-    bool add_paste_to_clipboard_history = false;
 };
 
 struct UpdateSettings {
@@ -97,9 +76,7 @@ struct AppSettings {
     ThemeSettings theme{};
     MouseSettings mouse{};
     ClipboardSettings clipboard{};
-    PasteSettings paste{};
     UpdateSettings update{};
-    std::unordered_map<std::wstring, std::wstring> process_rules{{L"default", L"always"}};
 };
 
 void initialize_slot_indices(AppSettings& settings) noexcept;

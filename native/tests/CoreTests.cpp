@@ -41,14 +41,12 @@ void settings_tests() {
     settings.wheel.sector_count = 7;
     settings.wheel.radius = 999;
     settings.clipboard.max_history_items = 99;
-    settings.paste.restore_clipboard_after_paste = true;
     smk::core::normalize_settings(settings);
     expect(settings.settings_version == 3, "settings version normalizes to v3");
     expect(settings.wheel.shape == L"circle", "unknown wheel shape falls back to circle");
     expect(settings.wheel.sector_count == 6 || settings.wheel.sector_count == 8, "circle sector count snaps to a tier");
     expect(settings.wheel.radius == 360, "wheel radius matches managed normalization range");
     expect(settings.clipboard.max_history_items == 8, "history count remains fixed at eight");
-    expect(!settings.paste.restore_clipboard_after_paste, "clipboard restore remains disabled");
     for (int index = 0; index < smk::core::kExtendedSlotCount; ++index) {
         expect(settings.wheel.extended_wheel.slots[static_cast<std::size_t>(index)].slot_index == index, "slot indexes normalize");
     }

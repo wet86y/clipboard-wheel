@@ -56,21 +56,7 @@ void normalize_settings(AppSettings& settings) noexcept {
     settings.wheel.selected_sector_scale = std::clamp(settings.wheel.selected_sector_scale, 1.0, 1.25);
     settings.wheel.extended_wheel.breakout_buffer_pixels =
         std::clamp(settings.wheel.extended_wheel.breakout_buffer_pixels, 0.0, 80.0);
-    settings.mouse.long_press_threshold_ms = std::clamp(settings.mouse.long_press_threshold_ms, 0, 2000);
     settings.clipboard.max_history_items = 8;
-    settings.paste.restore_delay_ms = std::clamp(settings.paste.restore_delay_ms, 0, 5000);
-
-    // These policies are intentionally fixed in the managed application and
-    // remain fixed during the native migration.
-    settings.clipboard.load_windows_clipboard_history_on_startup = true;
-    settings.clipboard.capture_plain_text = true;
-    settings.clipboard.capture_html = true;
-    settings.clipboard.capture_rtf = true;
-    settings.clipboard.capture_csv = true;
-    settings.clipboard.ignore_password_like_text = false;
-    settings.paste.default_mode = L"smart";
-    settings.paste.restore_clipboard_after_paste = false;
-    settings.paste.add_paste_to_clipboard_history = false;
 
     initialize_slot_indices(settings);
 }
