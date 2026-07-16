@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <condition_variable>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -48,7 +49,7 @@ public:
     bool install() override;
     void settings_closed() override;
 
-    void shutdown();
+    bool shutdown(DWORD timeout_ms);
     [[nodiscard]] bool ui_enabled() const noexcept { return ui_enabled_; }
 
 private:
@@ -72,6 +73,8 @@ private:
     desktop_update_kit::DownloadSession session_;
     std::jthread check_thread_;
     mutable std::mutex mutex_;
+    std::condition_variable check_finished_signal_;
+    bool check_finished_{true};
     UpdateViewState state_;
     std::shared_ptr<ObserverSlot> observer_slot_;
     std::optional<desktop_update_kit::Release> release_;

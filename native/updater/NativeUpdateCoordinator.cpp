@@ -3,6 +3,7 @@
 #include "platform/windows/DiagnosticLog.h"
 
 #include <format>
+#include <limits>
 #include <utility>
 
 namespace smk::updater {
@@ -88,7 +89,7 @@ NativeUpdateCoordinator::NativeUpdateCoordinator(HINSTANCE instance, std::filesy
     });
 }
 
-NativeUpdateCoordinator::~NativeUpdateCoordinator() { shutdown(); }
+NativeUpdateCoordinator::~NativeUpdateCoordinator() { (void)shutdown(INFINITE); }
 
 void NativeUpdateCoordinator::set_observer(Observer observer) {
     UpdateViewState current;
@@ -121,7 +122,13 @@ void NativeUpdateCoordinator::publish(UpdateViewState value) {
     }
     if (observer) {
         std::scoped_lock lock(observer->mutex);
-        if (observer->active && observer->observer) observer->observer(current);
+        if (observer->active && observer->observer) {
+            try {
+                observer->observer(current);
+            } catch (...) {
+                // UI observers are isolated from update worker threads.
+            }
+        }
     }
 }
 
@@ -146,6 +153,10 @@ void NativeUpdateCoordinator::check() {
     checking.status = L"正在检查更新…";
     SMK_DIAGNOSTIC_EVENT("update.check.started", L"channel=update");
     publish(checking);
+    {
+        std::scoped_lock lock(mutex_);
+        check_finished_ = false;
+    }
     check_thread_ = std::jthread([this](std::stop_token token) {
         try {
             auto release = client_.check_for_update(token);
@@ -172,7 +183,18 @@ void NativeUpdateCoordinator::check() {
             failed.state = UpdateState::failed;
             failed.status = L"检查更新失败：" + widen(error.what());
             publish(failed);
+        } catch (...) {
+            SMK_DIAGNOSTIC_EVENT("update.check.failed", L"result=unknown-worker-exception");
+            auto failed = state();
+            failed.state = UpdateState::failed;
+            failed.status = L"检查更新失败。";
+            publish(failed);
         }
+        {
+            std::scoped_lock lock(mutex_);
+            check_finished_ = true;
+        }
+        check_finished_signal_.notify_all();
     });
 }
 
@@ -200,14 +222,16 @@ void NativeUpdateCoordinator::next_node() { if (ui_enabled_) (void)session_.next
 bool NativeUpdateCoordinator::install() {
     if (!ui_enabled_) return false;
     const auto snapshot = session_.snapshot();
-    if (snapshot.state != desktop_update_kit::SessionState::completed || snapshot.downloaded_path.empty()) return false;
+    if (snapshot.state != desktop_update_kit::SessionState::completed || snapshot.downloaded_path.empty() ||
+        !snapshot.release || snapshot.release->sha256.empty()) return false;
     auto launching = state();
     launching.state = UpdateState::launching;
     launching.status = L"更新助理已启动，程序即将退出…";
     publish(launching);
     const auto stub = updater_stub();
     const auto result = desktop_update_kit::launch_update(stub, snapshot.downloaded_path,
-        std::filesystem::absolute(executable_), static_cast<int>(GetCurrentProcessId()));
+        std::filesystem::absolute(executable_), snapshot.release->sha256,
+        static_cast<int>(GetCurrentProcessId()));
     if (!result.started) {
         SMK_DIAGNOSTIC_EVENT("update.install.failed", L"stage=launch-stub");
         auto failed = state();
@@ -276,27 +300,49 @@ std::wstring NativeUpdateCoordinator::widen(const std::string& text) {
     return widen_utf8(text);
 }
 
-void NativeUpdateCoordinator::shutdown() {
+bool NativeUpdateCoordinator::shutdown(DWORD timeout_ms) {
+    const ULONGLONG deadline = timeout_ms == INFINITE ? std::numeric_limits<ULONGLONG>::max()
+        : GetTickCount64() + timeout_ms;
+    const auto remaining = [&]() -> std::chrono::milliseconds {
+        if (timeout_ms == INFINITE) return std::chrono::milliseconds::max();
+        const auto now = GetTickCount64();
+        return std::chrono::milliseconds(now >= deadline ? 0 : deadline - now);
+    };
     std::shared_ptr<ObserverSlot> observer;
     {
         std::scoped_lock lock(mutex_);
-        if (shutting_down_) return;
-        shutting_down_ = true;
-        observer = std::exchange(observer_slot_, {});
+        if (!shutting_down_) {
+            shutting_down_ = true;
+            observer = std::exchange(observer_slot_, {});
+        }
     }
     deactivate_observer(observer);
     if (check_thread_.joinable()) check_thread_.request_stop();
+    client_.cancel_active_requests();
     (void)session_.cancel();
     session_.set_changed_callback({});
-    if (check_thread_.joinable()) check_thread_.join();
+    bool check_stopped{};
+    {
+        std::unique_lock lock(mutex_);
+        if (timeout_ms == INFINITE) {
+            check_finished_signal_.wait(lock, [this] { return check_finished_; });
+            check_stopped = true;
+        } else {
+            check_stopped = check_finished_signal_.wait_for(lock, remaining(), [this] { return check_finished_; });
+        }
+    }
+    if (check_stopped && check_thread_.joinable()) check_thread_.join();
+    const bool session_stopped = session_.wait_for_stop(remaining());
     bool installation_started{};
     {
         std::scoped_lock lock(mutex_);
         installation_started = installation_started_;
     }
     const auto snapshot = session_.snapshot();
-    if (!installation_started && snapshot.state == desktop_update_kit::SessionState::completed)
+    if (check_stopped && session_stopped && !installation_started &&
+        snapshot.state == desktop_update_kit::SessionState::completed)
         session_.discard_completed();
+    return check_stopped && session_stopped;
 }
 
 } // namespace smk::updater

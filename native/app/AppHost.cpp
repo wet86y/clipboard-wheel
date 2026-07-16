@@ -197,7 +197,13 @@ void AppHost::shutdown() {
         else (void)extended_actions_.release();
     }
     settings_window_.detach_update_controller();
-    if (updater_) { updater_->shutdown(); updater_.reset(); }
+    if (updater_) {
+        if (updater_->shutdown(remaining_shutdown_ms())) updater_.reset();
+        else {
+            smk::windows::startup_trace(L"update worker stop timed out; retaining isolated worker state until process exit");
+            (void)updater_.release();
+        }
+    }
     if (windows_history_) {
         if (windows_history_->stop(remaining_shutdown_ms())) windows_history_.reset();
         else (void)windows_history_.release();
