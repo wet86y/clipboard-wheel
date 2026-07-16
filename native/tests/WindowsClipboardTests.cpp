@@ -228,6 +228,13 @@ int main() {
         "Win+V pure screenshots import when image capture is enabled");
     expect(!smk::windows::should_import_history_image(history_screenshot, false, true),
         "Win+V screenshots respect the image capture toggle");
+    expect(smk::windows::should_retry_clipboard_flush(CLIPBRD_E_CANT_OPEN, 1)
+        && smk::windows::should_retry_clipboard_flush(CLIPBRD_E_CANT_CLOSE, 5),
+        "shutdown retries transient clipboard open and close failures");
+    expect(!smk::windows::should_retry_clipboard_flush(CLIPBRD_E_CANT_OPEN, 6)
+        && !smk::windows::should_retry_clipboard_flush(E_FAIL, 1)
+        && !smk::windows::should_retry_clipboard_flush(S_OK, 1),
+        "shutdown stops after six attempts and never retries terminal or successful flush results");
 
     if (payload) {
         auto* browser_source = new BrowserImageDataObject(payload->png, L"JPG", true);

@@ -68,6 +68,10 @@ private:
     return entry.has_image() && !entry.looks_like_spreadsheet;
 }
 
+[[nodiscard]] inline bool should_retry_clipboard_flush(HRESULT result, unsigned attempt) noexcept {
+    return attempt < 6 && (result == CLIPBRD_E_CANT_OPEN || result == CLIPBRD_E_CANT_CLOSE);
+}
+
 class ClipboardService final {
 public:
     using ChangedCallback = std::function<void()>;

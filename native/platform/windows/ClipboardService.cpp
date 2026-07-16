@@ -25,6 +25,7 @@ constexpr UINT_PTR kCaptureTimer = 3;
 constexpr UINT_PTR kCaptureRetryTimer = 4;
 constexpr UINT kRetryIntervalMs = 20;
 constexpr UINT kCaptureRetryIntervalMs = 50;
+constexpr DWORD kClipboardFlushRetryIntervalMs = 50;
 constexpr ULONGLONG kRetryTimeoutMs = 1500;
 
 bool contains_ignore_case(std::wstring_view value, std::wstring_view token) noexcept {
@@ -140,7 +141,19 @@ void ClipboardService::stop() {
         DestroyWindow(window_);
         window_ = nullptr;
     }
-    if (owned_clipboard_) OleFlushClipboard();
+    if (owned_clipboard_) {
+        HRESULT flush_result = S_FALSE;
+        for (unsigned attempt = 1; attempt <= 6; ++attempt) {
+            if (OleIsCurrentClipboard(owned_clipboard_.Get()) != S_OK) break;
+            flush_result = OleFlushClipboard();
+            if (SUCCEEDED(flush_result) || !should_retry_clipboard_flush(flush_result, attempt)) break;
+            Sleep(kClipboardFlushRetryIntervalMs);
+        }
+        if (FAILED(flush_result)) {
+            SMK_DIAGNOSTIC_EVENT("clipboard.flush_failed",
+                std::format(L"hr=0x{:08X}", static_cast<unsigned>(flush_result)));
+        }
+    }
     owned_clipboard_.Reset();
 }
 
