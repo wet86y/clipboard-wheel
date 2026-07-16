@@ -19,9 +19,9 @@ DesktopUpdateKit-LICENSE.txt
 
 ```powershell
 .\scripts\run-self-check.ps1
-.\scripts\prepare-release-assets.ps1 -Version 2.0.0 -ReleaseNotes "..."
+.\scripts\prepare-release-assets.ps1 -Version 2.0.1 -ReleaseNotes "..."
 ```
 
-资产生成到 `build\release-assets\v2.0.0`。程序资产使用 ASCII 名称，应用落地名称仍为
+资产生成到 `build\release-assets\v2.0.1`。程序资产使用 ASCII 名称，应用落地名称仍为
 `超级中键.exe`。`update.json`、SHA-256 和许可证资产由 DesktopUpdateKit 共享工具生成；
 SHA-256 只证明完整性，不代替代码签名。

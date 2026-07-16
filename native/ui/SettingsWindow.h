@@ -212,7 +212,7 @@ private:
     SaveCallback save_{};
     smk::updater::UpdateController* update_controller_ = nullptr;
     smk::updater::UpdateViewState update_state_{};
-    std::wstring version_text_ = L"2.0.0";
+    std::wstring version_text_ = L"2.0.1";
     double release_notes_scroll_ = 0.0;
     double release_notes_extent_ = 0.0;
     bool release_notes_dragging_ = false;

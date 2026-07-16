@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-set(SMK_VERSION "2.0.0" CACHE STRING "Super Middle Key native version")
+set(SMK_VERSION "2.0.1")
 project(SuperMiddleKeyNative VERSION ${SMK_VERSION} LANGUAGES CXX RC)
 
 if(NOT WIN32)
