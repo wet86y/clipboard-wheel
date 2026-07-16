@@ -1,8 +1,10 @@
 #include "platform/windows/WindowsClipboardHistory.h"
+#include "platform/windows/ImageClipboardPayload.h"
 
 #include <roapi.h>
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Storage.Streams.h>
 #include <winrt/base.h>
 
 #include <algorithm>
@@ -81,7 +83,7 @@ LRESULT WindowsClipboardHistory::handle_message(UINT message, WPARAM wparam, LPA
     return DefWindowProcW(window_, message, wparam, lparam);
 }
 
-void WindowsClipboardHistory::load_on_worker(std::stop_token stop_token, std::size_t limit, bool) {
+void WindowsClipboardHistory::load_on_worker(std::stop_token stop_token, std::size_t limit, bool capture_images) {
     try {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
         using Clipboard = winrt::Windows::ApplicationModel::DataTransfer::Clipboard;
@@ -101,12 +103,36 @@ void WindowsClipboardHistory::load_on_worker(std::stop_token stop_token, std::si
             entry.source_process_name = L"WindowsClipboardHistory";
             if (view.Contains(StandardDataFormats::Text())) entry.plain_text = view.GetTextAsync().get().c_str();
             if (view.Contains(StandardDataFormats::Html())) entry.html_text = view.GetHtmlFormatAsync().get().c_str();
+            if (view.Contains(StandardDataFormats::Rtf())) entry.rtf_text = view.GetRtfAsync().get().c_str();
+            if (capture_images && view.Contains(StandardDataFormats::Bitmap())) {
+                const auto reference = view.GetBitmapAsync().get();
+                const auto stream = reference ? reference.OpenReadAsync().get() : nullptr;
+                if (stream && stream.Size() > 0 && stream.Size() <= ImageClipboardPayload::kMaxEncodedBytes) {
+                    const auto size = static_cast<std::uint32_t>(stream.Size());
+                    winrt::Windows::Storage::Streams::DataReader reader(stream);
+                    if (reader.LoadAsync(size).get() == size) {
+                        std::vector<std::uint8_t> bytes(size);
+                        reader.ReadBytes(winrt::array_view<std::uint8_t>(bytes));
+                        if (const auto image = normalize_png_payload(bytes)) {
+                            entry.image_png_bytes = image->png;
+                            entry.preview_image_png_bytes = image->preview_png;
+                            entry.image_hash = image->sha256;
+                            entry.image_width = image->width;
+                            entry.image_height = image->height;
+                            entry.is_image_content = true;
+                        }
+                    }
+                }
+            }
             entry.looks_like_spreadsheet = entry.plain_text.find(L'\t') != std::wstring::npos
                 || entry.plain_text.find(L'\n') != std::wstring::npos
                 || entry.html_text.find(L"<table") != std::wstring::npos;
             entry.looks_like_single_cell = !entry.plain_text.empty() && entry.plain_text.find_first_of(L"\t\r\n") == std::wstring::npos;
-            entry.display_text = entry.plain_text.substr(0, std::min<std::size_t>(entry.plain_text.size(), 80));
-            if (!entry.plain_text.empty() || !entry.html_text.empty()) imported.push_back(std::move(entry));
+            entry.display_text = entry.is_image_content
+                ? L"[图片]"
+                : entry.plain_text.substr(0, std::min<std::size_t>(entry.plain_text.size(), 80));
+            if (!entry.plain_text.empty() || !entry.html_text.empty() || !entry.rtf_text.empty()
+                || entry.has_image()) imported.push_back(std::move(entry));
         }
         if (imported.empty() || stop_token.stop_requested() || !window_) return;
         auto* payload = new std::vector<smk::core::ClipboardEntry>(std::move(imported));
