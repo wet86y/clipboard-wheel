@@ -5,17 +5,47 @@
 #include "platform/windows/StartupTrace.h"
 
 #include <algorithm>
+#include <cstddef>
 
 namespace smk::windows {
 namespace {
 constexpr std::uint64_t kHeartbeatTimeoutMs = 1000;
 constexpr std::uint64_t kPhysicalReleaseMinimumMs = 100;
+constexpr std::uint64_t kWheelFailSafeMs = 15'000;
 constexpr DWORD kWatchdogIntervalMs = 50;
 constexpr std::array<std::uint64_t, 4> kRetryDelays{1000, 5000, 30'000, 30'000};
 
 std::size_t event_index(MouseHookEvent event) noexcept {
     const auto value = static_cast<std::size_t>(event);
     return value > 0 && value <= 6 ? value - 1 : 0;
+}
+
+DWORD process_integrity_rid(HANDLE process) noexcept {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(process, TOKEN_QUERY, &token)) return 0;
+    DWORD size = 0;
+    (void)GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &size);
+    if (!size) {
+        CloseHandle(token);
+        return 0;
+    }
+    std::array<std::byte, 256> storage{};
+    if (size > storage.size() ||
+        !GetTokenInformation(token, TokenIntegrityLevel, storage.data(),
+            static_cast<DWORD>(storage.size()), &size)) {
+        CloseHandle(token);
+        return 0;
+    }
+    CloseHandle(token);
+    const auto label = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(storage.data());
+    const auto count = *GetSidSubAuthorityCount(label->Label.Sid);
+    return count ? *GetSidSubAuthority(label->Label.Sid, count - 1) : 0;
+}
+
+bool desktop_name(HDESK desktop, std::array<wchar_t, 128>& name) noexcept {
+    DWORD needed = 0;
+    return desktop && GetUserObjectInformationW(desktop, UOI_NAME, name.data(),
+        static_cast<DWORD>(name.size() * sizeof(wchar_t)), &needed) != FALSE;
 }
 }
 
@@ -136,7 +166,22 @@ MouseInputSafetyState::Decision MouseInputSafetyState::handle(
 }
 
 MouseInputSafetyState::Decision MouseInputSafetyState::poll(
-    bool physical_middle_down, bool all_buttons_released, std::uint64_t tick) noexcept {
+    PhysicalButtonState physical_middle, bool all_buttons_released, std::uint64_t tick) noexcept {
+    if (physical_middle == PhysicalButtonState::unavailable) {
+        input_observable_ = false;
+        ui_healthy_ = false;
+        recovering_ = true;
+        recovery_heartbeats_ = 0;
+        return emergency_release();
+    }
+    if (!input_observable_) {
+        input_observable_ = true;
+        ui_healthy_ = false;
+        recovering_ = true;
+        recovery_heartbeats_ = 0;
+    }
+    if (middle_down_suppressed_ && tick - middle_down_tick_ >= kWheelFailSafeMs)
+        return emergency_release();
     if (last_heartbeat_tick_ && tick - last_heartbeat_tick_ > kHeartbeatTimeoutMs) {
         if (ui_healthy_ || wheel_active_) {
             ui_healthy_ = false;
@@ -158,7 +203,7 @@ MouseInputSafetyState::Decision MouseInputSafetyState::poll(
         }
     } else button_up_samples_ = 0;
     if (middle_down_suppressed_ && tick - middle_down_tick_ >= kPhysicalReleaseMinimumMs) {
-        if (physical_middle_down) {
+        if (physical_middle == PhysicalButtonState::down) {
             physical_down_observed_ = true;
             physical_up_samples_ = 0;
         } else if (physical_down_observed_) {
@@ -209,6 +254,17 @@ MouseInputSafetyState::Decision MouseInputSafetyState::dispatch_failed(WPARAM me
     return cancel_active();
 }
 
+MouseInputSafetyState::Decision MouseInputSafetyState::emergency_release() noexcept {
+    const bool dispatch = wheel_active_;
+    wheel_active_ = false;
+    middle_down_suppressed_ = false;
+    physical_up_samples_ = 0;
+    physical_down_observed_ = false;
+    button_up_samples_ = 0;
+    buttons_.reset();
+    return {.dispatch = dispatch, .event = MouseHookEvent::cancel, .generation = generation_};
+}
+
 MouseInputSafetyState::Decision MouseInputSafetyState::cancel_active() noexcept {
     if (!wheel_active_) return {};
     wheel_active_ = false;
@@ -226,17 +282,21 @@ bool MouseHook::start() {
     if (thread_) return true;
     ready_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     stopped_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (!ready_event_ || !stopped_event_) {
+    fail_open_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!ready_event_ || !stopped_event_ || !fail_open_event_) {
         if (ready_event_) CloseHandle(ready_event_);
         if (stopped_event_) CloseHandle(stopped_event_);
-        ready_event_ = stopped_event_ = nullptr;
+        if (fail_open_event_) CloseHandle(fail_open_event_);
+        ready_event_ = stopped_event_ = fail_open_event_ = nullptr;
         return false;
     }
+    current_integrity_rid_ = process_integrity_rid(GetCurrentProcess());
     thread_ = CreateThread(nullptr, 0, thread_entry, this, 0, &thread_id_);
     if (!thread_) {
         CloseHandle(ready_event_);
         CloseHandle(stopped_event_);
-        ready_event_ = stopped_event_ = nullptr;
+        CloseHandle(fail_open_event_);
+        ready_event_ = stopped_event_ = fail_open_event_ = nullptr;
         return false;
     }
     if (WaitForSingleObject(ready_event_, 1500) != WAIT_OBJECT_0) {
@@ -259,14 +319,15 @@ bool MouseHook::stop(DWORD timeout_ms) noexcept {
         thread_id_ = 0;
         CloseHandle(ready_event_);
         CloseHandle(stopped_event_);
-        ready_event_ = stopped_event_ = nullptr;
+        CloseHandle(fail_open_event_);
+        ready_event_ = stopped_event_ = fail_open_event_ = nullptr;
     }
     return stopped;
 }
 
 void MouseHook::set_enabled(bool enabled) noexcept {
     desired_enabled_.store(enabled, std::memory_order_release);
-    if (thread_id_) PostThreadMessageW(thread_id_, kStateChangedMessage, enabled, 0);
+    post_control_or_fail_open(kStateChangedMessage, enabled, 0);
 }
 
 void MouseHook::heartbeat() noexcept {
@@ -274,23 +335,33 @@ void MouseHook::heartbeat() noexcept {
 }
 
 void MouseHook::suspend() noexcept {
-    if (thread_id_) PostThreadMessageW(thread_id_, kSuspendMessage, 0, 0);
+    post_control_or_fail_open(kSuspendMessage);
 }
 
 void MouseHook::resume() noexcept {
-    if (thread_id_) PostThreadMessageW(thread_id_, kResumeMessage, 0, 0);
+    post_control_or_fail_open(kResumeMessage);
 }
 
 void MouseHook::retry_now() noexcept {
-    if (thread_id_) PostThreadMessageW(thread_id_, kRetryMessage, 0, 0);
+    post_control_or_fail_open(kRetryMessage);
 }
 
 void MouseHook::acknowledge_show(std::uint32_t generation, bool success) noexcept {
-    if (thread_id_) PostThreadMessageW(thread_id_, kShowResultMessage, generation, success);
+    post_control_or_fail_open(kShowResultMessage, generation, success);
 }
 
 void MouseHook::cancel_session(std::uint32_t generation) noexcept {
-    if (thread_id_) PostThreadMessageW(thread_id_, kCancelMessage, generation, 0);
+    post_control_or_fail_open(kCancelMessage, generation, 0);
+}
+
+void MouseHook::post_control_or_fail_open(UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    if (thread_id_ && PostThreadMessageW(thread_id_, message, wparam, lparam)) return;
+    request_fail_open();
+}
+
+void MouseHook::request_fail_open() noexcept {
+    fail_open_requested_.store(true, std::memory_order_release);
+    if (fail_open_event_) SetEvent(fail_open_event_);
 }
 
 POINT MouseHook::event_point(MouseHookEvent event) const noexcept {
@@ -327,9 +398,11 @@ DWORD MouseHook::thread_main() noexcept {
     SetEvent(ready_event_);
     bool running = true;
     while (running) {
-        const DWORD wait = MsgWaitForMultipleObjectsEx(0, nullptr, kWatchdogIntervalMs,
+        const HANDLE handles[]{fail_open_event_};
+        const DWORD wait = MsgWaitForMultipleObjectsEx(1, handles, kWatchdogIntervalMs,
             QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         if (wait == WAIT_FAILED) { fail_open(); break; }
+        if (wait == WAIT_OBJECT_0) apply_requested_fail_open();
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
             switch (message.message) {
             case kStopMessage: running = false; break;
@@ -399,9 +472,28 @@ LRESULT CALLBACK MouseHook::hook_proc(int code, WPARAM wparam, LPARAM lparam) no
     }
 }
 
+LRESULT CALLBACK MouseHook::keyboard_hook_proc(int code, WPARAM wparam, LPARAM lparam) noexcept {
+    if (code < 0 || !active_) return CallNextHookEx(nullptr, code, wparam, lparam);
+    try {
+        return active_->process_keyboard_event(code, wparam,
+            *reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam));
+    } catch (...) {
+        active_->fail_open();
+        return CallNextHookEx(nullptr, code, wparam, lparam);
+    }
+}
+
 LRESULT MouseHook::process_hook_event(int code, WPARAM wparam,
     const MSLLHOOKSTRUCT& event) {
     if (code < 0) return CallNextHookEx(nullptr, code, wparam, reinterpret_cast<LPARAM>(&event));
+    const bool access_sensitive = wparam == WM_MBUTTONDOWN ||
+        (state_.wheel_active() && (wparam == WM_LBUTTONDOWN || wparam == WM_RBUTTONDOWN));
+    if (access_sensitive && query_input_access() != InputAccess::accessible) {
+        const auto cancel = state_.poll(PhysicalButtonState::unavailable, false, GetTickCount64());
+        if (cancel.dispatch) (void)post_event(cancel.event, cancel.generation, event.pt);
+        publish_state();
+        return CallNextHookEx(nullptr, code, wparam, reinterpret_cast<LPARAM>(&event));
+    }
     auto decision = state_.handle(wparam, true, GetTickCount64());
     generation_.store(state_.generation(), std::memory_order_release);
     if (decision.dispatch && !post_event(decision.event, decision.generation, event.pt)) {
@@ -414,10 +506,37 @@ LRESULT MouseHook::process_hook_event(int code, WPARAM wparam,
         reinterpret_cast<LPARAM>(&event));
 }
 
+LRESULT MouseHook::process_keyboard_event(int code, WPARAM wparam,
+    const KBDLLHOOKSTRUCT& event) noexcept {
+    if (code < 0 || event.vkCode != VK_ESCAPE)
+        return CallNextHookEx(nullptr, code, wparam, reinterpret_cast<LPARAM>(&event));
+    const bool down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
+    const bool up = wparam == WM_KEYUP || wparam == WM_SYSKEYUP;
+    if (down && (state_.wheel_active() || escape_down_suppressed_)) {
+        escape_down_suppressed_ = true;
+        const auto cancel = state_.emergency_release();
+        publish_state();
+        if (cancel.dispatch) (void)post_event(cancel.event, cancel.generation, {});
+        return 1;
+    }
+    if (up && escape_down_suppressed_) {
+        escape_down_suppressed_ = false;
+        return 1;
+    }
+    return CallNextHookEx(nullptr, code, wparam, reinterpret_cast<LPARAM>(&event));
+}
+
 bool MouseHook::install_hook() noexcept {
-    if (hook_) return true;
+    if (hook_ && keyboard_hook_) return true;
     hook_ = SetWindowsHookExW(WH_MOUSE_LL, hook_proc, GetModuleHandleW(nullptr), 0);
-    const bool success = hook_ != nullptr;
+    keyboard_hook_ = SetWindowsHookExW(WH_KEYBOARD_LL, keyboard_hook_proc, GetModuleHandleW(nullptr), 0);
+    const bool success = hook_ != nullptr && keyboard_hook_ != nullptr;
+    if (!success) {
+        if (hook_) UnhookWindowsHookEx(hook_);
+        if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
+        hook_ = nullptr;
+        keyboard_hook_ = nullptr;
+    }
     available_.store(success, std::memory_order_release);
     state_.note_hook_available(success);
     if (success) {
@@ -445,7 +564,10 @@ void MouseHook::uninstall_hook() noexcept {
         swprintf_s(details, L"success=%u error=%lu", result != FALSE ? 1u : 0u, error);
         SMK_DIAGNOSTIC_EVENT("input.hook.uninstall", details);
     }
+    if (keyboard_hook_) (void)UnhookWindowsHookEx(keyboard_hook_);
     hook_ = nullptr;
+    keyboard_hook_ = nullptr;
+    escape_down_suppressed_ = false;
     available_.store(false, std::memory_order_release);
     state_.note_hook_available(false);
     publish_state();
@@ -460,16 +582,20 @@ void MouseHook::schedule_retry(std::uint64_t now) noexcept {
 void MouseHook::run_watchdog(std::uint64_t now) noexcept {
     const auto heartbeat = heartbeat_tick_.load(std::memory_order_acquire);
     if (heartbeat) state_.note_heartbeat(heartbeat);
-    const bool physical_middle = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+    const auto access = state_.wheel_active() || !state_.input_observable()
+        ? query_input_access() : InputAccess::accessible;
+    const auto physical_middle = physical_middle_state(access);
     const bool was_ui_healthy = state_.ui_healthy();
     const bool was_middle_suppressed = state_.middle_down_suppressed();
     const bool was_capture_ready = state_.capture_ready();
-    const auto decision = state_.poll(physical_middle, all_buttons_released(), now);
+    const auto decision = state_.poll(physical_middle,
+        access == InputAccess::accessible && all_buttons_released(), now);
     if (decision.dispatch) {
         (void)post_event(decision.event, decision.generation, {});
         wchar_t details[96]{};
-        const wchar_t* reason = was_ui_healthy && !state_.ui_healthy()
-            ? L"ui_heartbeat_stale"
+        const wchar_t* reason = access != InputAccess::accessible
+            ? input_access_reason(access)
+            : was_ui_healthy && !state_.ui_healthy() ? L"ui_heartbeat_stale"
             : was_middle_suppressed && !state_.middle_down_suppressed()
                 ? L"physical_middle_release" : L"watchdog";
         swprintf_s(details, L"generation=%u reason=%s", decision.generation, reason);
@@ -479,6 +605,56 @@ void MouseHook::run_watchdog(std::uint64_t now) noexcept {
         SMK_DIAGNOSTIC_EVENT("input.capture.recovered", L"heartbeats=2 buttons=released");
     if (!hook_ && next_retry_tick_ && now >= next_retry_tick_) (void)install_hook();
     publish_state();
+}
+
+MouseHook::InputAccess MouseHook::query_input_access() const noexcept {
+    const HDESK current = GetThreadDesktop(GetCurrentThreadId());
+    const HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+    if (!input) return InputAccess::secure_desktop;
+    std::array<wchar_t, 128> current_name{};
+    std::array<wchar_t, 128> input_name{};
+    const bool same_desktop = desktop_name(current, current_name) &&
+        desktop_name(input, input_name) && _wcsicmp(current_name.data(), input_name.data()) == 0;
+    CloseDesktop(input);
+    if (!same_desktop) return InputAccess::secure_desktop;
+
+    const HWND foreground = GetForegroundWindow();
+    if (!foreground) return InputAccess::unavailable;
+    DWORD process_id = 0;
+    (void)GetWindowThreadProcessId(foreground, &process_id);
+    if (!process_id) return InputAccess::unavailable;
+    if (process_id == GetCurrentProcessId()) return InputAccess::accessible;
+    const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+    if (!process) return InputAccess::unavailable;
+    const DWORD foreground_integrity = process_integrity_rid(process);
+    CloseHandle(process);
+    if (!foreground_integrity || !current_integrity_rid_) return InputAccess::unavailable;
+    return foreground_integrity > current_integrity_rid_
+        ? InputAccess::higher_integrity : InputAccess::accessible;
+}
+
+PhysicalButtonState MouseHook::physical_middle_state(InputAccess access) const noexcept {
+    if (access != InputAccess::accessible) return PhysicalButtonState::unavailable;
+    return (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0
+        ? PhysicalButtonState::down : PhysicalButtonState::up;
+}
+
+const wchar_t* MouseHook::input_access_reason(InputAccess access) noexcept {
+    switch (access) {
+    case InputAccess::secure_desktop: return L"secure_desktop";
+    case InputAccess::higher_integrity: return L"higher_integrity_foreground";
+    case InputAccess::unavailable: return L"input_access_unavailable";
+    default: return L"accessible";
+    }
+}
+
+void MouseHook::apply_requested_fail_open() noexcept {
+    if (fail_open_event_) ResetEvent(fail_open_event_);
+    if (!fail_open_requested_.exchange(false, std::memory_order_acq_rel)) return;
+    const auto cancel = state_.emergency_release();
+    publish_state();
+    if (cancel.dispatch) (void)post_event(cancel.event, cancel.generation, {});
+    SMK_DIAGNOSTIC_EVENT("input.fail_open", L"reason=control_message_failure");
 }
 
 bool MouseHook::post_event(MouseHookEvent event, std::uint32_t generation, POINT point) noexcept {

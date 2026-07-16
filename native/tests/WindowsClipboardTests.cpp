@@ -349,37 +349,45 @@ int main() {
     smk::windows::MouseInputSafetyState input_state;
     input_state.note_hook_available(true);
     input_state.note_heartbeat(100);
-    (void)input_state.poll(false, true, 100);
+    (void)input_state.poll(smk::windows::PhysicalButtonState::up, true, 100);
     input_state.note_heartbeat(350);
-    (void)input_state.poll(false, true, 350);
+    (void)input_state.poll(smk::windows::PhysicalButtonState::up, true, 350);
     expect(input_state.capture_ready(), "capture waits for two UI heartbeats and released buttons");
     auto input = input_state.handle(WM_MBUTTONDOWN, true, 400);
     expect(input.suppress && input.dispatch && input.generation == 1,
         "a healthy middle down is paired and dispatched");
     input_state.acknowledge_show(input.generation, true);
-    input_state.note_heartbeat(30'400);
-    input = input_state.poll(true, false, 30'400);
+    (void)input_state.handle(WM_LBUTTONDOWN, true, 450);
+    input_state.note_heartbeat(15'399);
+    input = input_state.poll(smk::windows::PhysicalButtonState::down, false, 15'399);
     expect(input_state.wheel_active() && input_state.middle_down_suppressed() && !input.dispatch,
-        "a physically held middle button remains active for 30 seconds without an absolute timeout");
-    input = input_state.handle(WM_MBUTTONUP, true, 30'450);
-    expect(input.suppress && input.dispatch && !input_state.middle_down_suppressed(),
-        "the matching middle release is swallowed and delivered once");
+        "the session remains active just before its fifteen-second limit");
+    input_state.note_heartbeat(15'400);
+    input = input_state.poll(smk::windows::PhysicalButtonState::down, false, 15'400);
+    expect(!input_state.wheel_active() && !input_state.middle_down_suppressed() && input.dispatch,
+        "the fifteen-second session limit releases every mouse button");
+    expect(!input_state.handle(WM_LBUTTONUP, false, 15'410).suppress,
+        "the session limit does not retain a global left-button pairing");
+    input = input_state.handle(WM_MBUTTONDOWN, true, 15'450);
+    expect(input.suppress && input.dispatch && input.generation == 2,
+        "capture remains enabled and a new middle press can open another session");
+    (void)input_state.emergency_release();
 
     smk::windows::MouseInputSafetyState lost_release;
     lost_release.note_hook_available(true);
     lost_release.note_heartbeat(10);
-    (void)lost_release.poll(false, true, 10);
+    (void)lost_release.poll(smk::windows::PhysicalButtonState::up, true, 10);
     lost_release.note_heartbeat(260);
-    (void)lost_release.poll(false, true, 260);
+    (void)lost_release.poll(smk::windows::PhysicalButtonState::up, true, 260);
     input = lost_release.handle(WM_MBUTTONDOWN, true, 300);
     lost_release.acknowledge_show(input.generation, true);
-    input = lost_release.poll(true, false, 405);
+    input = lost_release.poll(smk::windows::PhysicalButtonState::down, false, 405);
     expect(lost_release.middle_down_suppressed() && !input.dispatch,
         "physical release recovery first establishes an observed down state");
-    input = lost_release.poll(false, true, 410);
+    input = lost_release.poll(smk::windows::PhysicalButtonState::up, true, 410);
     expect(lost_release.middle_down_suppressed() && !input.dispatch,
         "one physical-up sample cannot end an input session");
-    input = lost_release.poll(false, true, 460);
+    input = lost_release.poll(smk::windows::PhysicalButtonState::up, true, 460);
     expect(!lost_release.middle_down_suppressed() && input.dispatch &&
         input.event == smk::windows::MouseHookEvent::cancel,
         "two physical-up samples recover a missing WM_MBUTTONUP without an action");
@@ -387,27 +395,33 @@ int main() {
     smk::windows::MouseInputSafetyState async_state_unavailable;
     async_state_unavailable.note_hook_available(true);
     async_state_unavailable.note_heartbeat(10);
-    (void)async_state_unavailable.poll(false, true, 10);
+    (void)async_state_unavailable.poll(smk::windows::PhysicalButtonState::up, true, 10);
     async_state_unavailable.note_heartbeat(260);
-    (void)async_state_unavailable.poll(false, true, 260);
+    (void)async_state_unavailable.poll(smk::windows::PhysicalButtonState::up, true, 260);
     input = async_state_unavailable.handle(WM_MBUTTONDOWN, true, 300);
     async_state_unavailable.acknowledge_show(input.generation, true);
-    async_state_unavailable.note_heartbeat(30'300);
-    input = async_state_unavailable.poll(false, true, 30'300);
-    input = async_state_unavailable.poll(false, true, 30'350);
-    expect(async_state_unavailable.wheel_active() &&
-        async_state_unavailable.middle_down_suppressed() && !input.dispatch,
-        "an async-state source that never observed down cannot falsely close a held wheel");
+    input = async_state_unavailable.poll(smk::windows::PhysicalButtonState::unavailable, false, 350);
+    expect(!async_state_unavailable.wheel_active() &&
+        !async_state_unavailable.middle_down_suppressed() && input.dispatch,
+        "an unavailable physical state immediately releases the global mouse hook session");
+    async_state_unavailable.note_heartbeat(600);
+    (void)async_state_unavailable.poll(smk::windows::PhysicalButtonState::up, true, 600);
+    async_state_unavailable.note_heartbeat(850);
+    (void)async_state_unavailable.poll(smk::windows::PhysicalButtonState::up, true, 850);
+    async_state_unavailable.note_heartbeat(1'100);
+    (void)async_state_unavailable.poll(smk::windows::PhysicalButtonState::up, true, 1'100);
+    expect(async_state_unavailable.capture_ready(),
+        "capture automatically returns after input access and released buttons are stable");
 
     smk::windows::MouseInputSafetyState stale_ui;
     stale_ui.note_hook_available(true);
     stale_ui.note_heartbeat(100);
-    (void)stale_ui.poll(false, true, 100);
+    (void)stale_ui.poll(smk::windows::PhysicalButtonState::up, true, 100);
     stale_ui.note_heartbeat(350);
-    (void)stale_ui.poll(false, true, 350);
+    (void)stale_ui.poll(smk::windows::PhysicalButtonState::up, true, 350);
     input = stale_ui.handle(WM_MBUTTONDOWN, true, 400);
     stale_ui.acknowledge_show(input.generation, true);
-    input = stale_ui.poll(true, false, 1'401);
+    input = stale_ui.poll(smk::windows::PhysicalButtonState::down, false, 1'401);
     expect(input.dispatch && input.event == smk::windows::MouseHookEvent::cancel &&
         !stale_ui.ui_healthy() && stale_ui.middle_down_suppressed(),
         "a stale UI fails open while retaining the paired middle release");
@@ -415,17 +429,17 @@ int main() {
     expect(input.suppress && !input.dispatch,
         "a stale UI never receives an action but the paired release remains swallowed");
     stale_ui.note_heartbeat(1'500);
-    (void)stale_ui.poll(false, true, 1'500);
+    (void)stale_ui.poll(smk::windows::PhysicalButtonState::up, true, 1'500);
     stale_ui.note_heartbeat(1'750);
-    (void)stale_ui.poll(false, true, 1'750);
+    (void)stale_ui.poll(smk::windows::PhysicalButtonState::up, true, 1'750);
     expect(stale_ui.capture_ready(), "capture automatically recovers after two heartbeats and full release");
 
     smk::windows::MouseInputSafetyState dispatch_failure;
     dispatch_failure.note_hook_available(true);
     dispatch_failure.note_heartbeat(10);
-    (void)dispatch_failure.poll(false, true, 10);
+    (void)dispatch_failure.poll(smk::windows::PhysicalButtonState::up, true, 10);
     dispatch_failure.note_heartbeat(260);
-    (void)dispatch_failure.poll(false, true, 260);
+    (void)dispatch_failure.poll(smk::windows::PhysicalButtonState::up, true, 260);
     input = dispatch_failure.handle(WM_MBUTTONDOWN, false, 300);
     expect(!input.suppress && !dispatch_failure.wheel_active(),
         "a failed UI event post passes the middle down through immediately");

@@ -8,6 +8,12 @@
 
 namespace smk::windows {
 
+enum class PhysicalButtonState : std::uint8_t {
+    up,
+    down,
+    unavailable,
+};
+
 class MouseButtonSuppression final {
 public:
     struct Decision {
@@ -54,17 +60,19 @@ public:
     void note_hook_available(bool available) noexcept;
     [[nodiscard]] Decision handle(WPARAM message, bool dispatch_succeeded,
         std::uint64_t tick) noexcept;
-    [[nodiscard]] Decision poll(bool physical_middle_down, bool all_buttons_released,
+    [[nodiscard]] Decision poll(PhysicalButtonState physical_middle, bool all_buttons_released,
         std::uint64_t tick) noexcept;
     [[nodiscard]] Decision suspend() noexcept;
     void resume() noexcept;
     void acknowledge_show(std::uint32_t generation, bool success) noexcept;
     void cancel(std::uint32_t generation) noexcept;
     [[nodiscard]] Decision dispatch_failed(WPARAM message) noexcept;
+    [[nodiscard]] Decision emergency_release() noexcept;
 
     [[nodiscard]] bool wheel_active() const noexcept { return wheel_active_; }
     [[nodiscard]] bool middle_down_suppressed() const noexcept { return middle_down_suppressed_; }
     [[nodiscard]] bool ui_healthy() const noexcept { return ui_healthy_; }
+    [[nodiscard]] bool input_observable() const noexcept { return input_observable_; }
     [[nodiscard]] bool capture_ready() const noexcept;
     [[nodiscard]] std::uint32_t generation() const noexcept { return generation_; }
 
@@ -77,6 +85,7 @@ private:
     bool suspended_ = false;
     bool ui_healthy_ = false;
     bool recovering_ = true;
+    bool input_observable_ = true;
     bool wheel_active_ = false;
     bool middle_down_suppressed_ = false;
     std::uint32_t generation_ = 0;
@@ -125,15 +134,30 @@ private:
     static constexpr UINT kShowResultMessage = WM_APP + 216;
     static constexpr UINT kCancelMessage = WM_APP + 217;
 
+    enum class InputAccess : std::uint8_t {
+        accessible,
+        secure_desktop,
+        higher_integrity,
+        unavailable,
+    };
+
     static DWORD WINAPI thread_entry(void* context) noexcept;
     DWORD thread_main() noexcept;
     static LRESULT CALLBACK hook_proc(int code, WPARAM wparam, LPARAM lparam) noexcept;
+    static LRESULT CALLBACK keyboard_hook_proc(int code, WPARAM wparam, LPARAM lparam) noexcept;
     LRESULT process_hook_event(int code, WPARAM wparam, const MSLLHOOKSTRUCT& event);
+    LRESULT process_keyboard_event(int code, WPARAM wparam, const KBDLLHOOKSTRUCT& event) noexcept;
     bool install_hook() noexcept;
     void uninstall_hook() noexcept;
     void schedule_retry(std::uint64_t now) noexcept;
     void run_watchdog(std::uint64_t now) noexcept;
+    [[nodiscard]] InputAccess query_input_access() const noexcept;
+    [[nodiscard]] PhysicalButtonState physical_middle_state(InputAccess access) const noexcept;
+    [[nodiscard]] static const wchar_t* input_access_reason(InputAccess access) noexcept;
     bool post_event(MouseHookEvent event, std::uint32_t generation, POINT point) noexcept;
+    void post_control_or_fail_open(UINT message, WPARAM wparam = 0, LPARAM lparam = 0) noexcept;
+    void request_fail_open() noexcept;
+    void apply_requested_fail_open() noexcept;
     void publish_state() noexcept;
     void fail_open() noexcept;
     [[nodiscard]] bool all_buttons_released() const noexcept;
@@ -143,8 +167,10 @@ private:
     HANDLE thread_ = nullptr;
     HANDLE ready_event_ = nullptr;
     HANDLE stopped_event_ = nullptr;
+    HANDLE fail_open_event_ = nullptr;
     DWORD thread_id_ = 0;
     HHOOK hook_ = nullptr;
+    HHOOK keyboard_hook_ = nullptr;
     MouseInputSafetyState state_;
     std::atomic_bool desired_enabled_{true};
     std::atomic_bool available_{false};
@@ -155,10 +181,13 @@ private:
     std::atomic_uint64_t move_sequence_{0};
     std::atomic_uint64_t posted_move_sequence_{0};
     std::atomic_bool move_pending_{false};
+    std::atomic_bool fail_open_requested_{false};
     std::array<std::atomic_long, 6> event_x_{};
     std::array<std::atomic_long, 6> event_y_{};
     std::uint64_t next_retry_tick_ = 0;
     unsigned retry_index_ = 0;
+    DWORD current_integrity_rid_ = 0;
+    bool escape_down_suppressed_ = false;
 };
 
 } // namespace smk::windows
