@@ -439,6 +439,14 @@ int main() {
         "a second format update restarts the forty millisecond quiet window");
     expect(clipboard_updates.consume_if_ready(1060) && !clipboard_updates.pending(),
         "a burst of clipboard updates produces one capture after the final managed quiet period");
+    clipboard_updates.note_update(2000, smk::windows::ClipboardUpdateCoalescer::kImageQuietPeriodMs);
+    expect(!clipboard_updates.consume_if_ready(2119),
+        "image clipboard updates retain the screenshot stabilization window");
+    clipboard_updates.note_update(2080, smk::windows::ClipboardUpdateCoalescer::kImageQuietPeriodMs);
+    expect(!clipboard_updates.consume_if_ready(2199) && clipboard_updates.remaining_ms(2199) == 1,
+        "a screenshot final-format update restarts the image stabilization window");
+    expect(clipboard_updates.consume_if_ready(2200) && !clipboard_updates.pending(),
+        "two-stage screenshot publication produces one capture after the final image update");
 
     const auto hotkey = smk::windows::parse_extended_hotkey(L"Ctrl+Shift+F12");
     expect(hotkey.size() == 3 && hotkey[0] == VK_CONTROL && hotkey[2] == VK_F12,

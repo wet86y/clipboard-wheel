@@ -39,6 +39,16 @@ bool contains_ignore_case(std::wstring_view value, std::wstring_view token) noex
     return false;
 }
 
+bool clipboard_has_image_format() {
+    if (IsClipboardFormatAvailable(CF_DIBV5) || IsClipboardFormatAvailable(CF_DIB)
+        || IsClipboardFormatAvailable(CF_BITMAP)) return true;
+    constexpr std::array<const wchar_t*, 12> encoded_names{L"PNG", L"image/png", L"JFIF", L"JPEG", L"JPG",
+        L"image/jpeg", L"image/jpg", L"GIF", L"image/gif", L"BMP", L"image/bmp", L"Bitmap"};
+    return std::any_of(encoded_names.begin(), encoded_names.end(), [](const wchar_t* name) {
+        return IsClipboardFormatAvailable(RegisterClipboardFormatW(name)) != FALSE;
+    });
+}
+
 std::wstring decode_text_bytes(const void* memory, std::size_t byte_count, bool unicode, UINT code_page) {
     if (!memory || !byte_count) return {};
     if (unicode) {
@@ -152,9 +162,12 @@ LRESULT ClipboardService::handle_message(UINT message, WPARAM wparam, LPARAM lpa
         scheduled_capture_generation_ = capture_retry_state_.begin();
         const ULONGLONG now = GetTickCount64();
         if (now >= suppress_capture_until_) {
-            capture_coalescer_.note_update(now);
+            const ULONGLONG quiet_period = capture_images_ && clipboard_has_image_format()
+                ? ClipboardUpdateCoalescer::kImageQuietPeriodMs
+                : ClipboardUpdateCoalescer::kQuietPeriodMs;
+            capture_coalescer_.note_update(now, quiet_period);
             if (!SetTimer(window_, kCaptureTimer,
-                    static_cast<UINT>(ClipboardUpdateCoalescer::kQuietPeriodMs), nullptr)) {
+                    static_cast<UINT>(quiet_period), nullptr)) {
                 capture_coalescer_.cancel();
                 if (capture_current_once() == CaptureAttempt::busy) schedule_capture_retry();
             }
@@ -172,7 +185,8 @@ LRESULT ClipboardService::handle_message(UINT message, WPARAM wparam, LPARAM lpa
         KillTimer(window_, kCaptureTimer);
         const ULONGLONG now = GetTickCount64();
         if (capture_coalescer_.consume_if_ready(now) && now >= suppress_capture_until_) {
-            SMK_DIAGNOSTIC_EVENT("clipboard.capture_coalesced", L"quiet_ms=40");
+            SMK_DIAGNOSTIC_EVENT("clipboard.capture_coalesced",
+                std::format(L"quiet_ms={}", capture_coalescer_.quiet_period_ms()));
             if (capture_current_once() == CaptureAttempt::busy) schedule_capture_retry();
         } else if (capture_coalescer_.pending()) {
             SetTimer(window_, kCaptureTimer, capture_coalescer_.remaining_ms(now), nullptr);

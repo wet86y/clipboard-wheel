@@ -16,10 +16,12 @@ namespace smk::windows {
 class ClipboardUpdateCoalescer final {
 public:
     static constexpr ULONGLONG kQuietPeriodMs = 40;
+    static constexpr ULONGLONG kImageQuietPeriodMs = 120;
 
-    void note_update(ULONGLONG now) noexcept {
+    void note_update(ULONGLONG now, ULONGLONG quiet_period_ms = kQuietPeriodMs) noexcept {
         pending_ = true;
-        due_at_ = now + kQuietPeriodMs;
+        quiet_period_ms_ = quiet_period_ms;
+        due_at_ = now + quiet_period_ms_;
     }
     [[nodiscard]] bool consume_if_ready(ULONGLONG now) noexcept {
         if (!pending_ || now < due_at_) return false;
@@ -32,10 +34,12 @@ public:
     }
     void cancel() noexcept { pending_ = false; due_at_ = 0; }
     [[nodiscard]] bool pending() const noexcept { return pending_; }
+    [[nodiscard]] ULONGLONG quiet_period_ms() const noexcept { return quiet_period_ms_; }
 
 private:
     bool pending_ = false;
     ULONGLONG due_at_ = 0;
+    ULONGLONG quiet_period_ms_ = kQuietPeriodMs;
 };
 
 class ClipboardCaptureRetryState final {
