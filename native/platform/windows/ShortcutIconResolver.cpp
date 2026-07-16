@@ -11,6 +11,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace smk::windows {
 namespace {
@@ -107,17 +108,17 @@ HICON shell_icon(const std::wstring& path, bool use_file_attributes) noexcept {
 }
 
 std::wstring shortcut_target(IShellLinkW* link) {
-    wchar_t target[32768]{};
+    std::vector<wchar_t> target(32768);
     WIN32_FIND_DATAW data{};
-    if (SUCCEEDED(link->GetPath(target, static_cast<int>(std::size(target)), &data, SLGP_RAWPATH))
-        && target[0] != L'\0') return expand_environment(target);
+    if (SUCCEEDED(link->GetPath(target.data(), static_cast<int>(target.size()), &data, SLGP_RAWPATH))
+        && target[0] != L'\0') return expand_environment(target.data());
 
     PIDLIST_ABSOLUTE item = nullptr;
     if (SUCCEEDED(link->GetIDList(&item)) && item) {
-        wchar_t resolved[32768]{};
-        const bool ok = SHGetPathFromIDListW(item, resolved) != FALSE;
+        std::vector<wchar_t> resolved(32768);
+        const bool ok = SHGetPathFromIDListW(item, resolved.data()) != FALSE;
         CoTaskMemFree(item);
-        if (ok) return resolved;
+        if (ok) return resolved.data();
     }
     return {};
 }
@@ -133,12 +134,12 @@ HICON resolve_uncached(const std::wstring& shortcut_path, int size) noexcept {
                 IID_PPV_ARGS(link.GetAddressOf())))
             && SUCCEEDED(link.As(&persist))
             && SUCCEEDED(persist->Load(link_path.c_str(), STGM_READ))) {
-            wchar_t icon_location[32768]{};
+            std::vector<wchar_t> icon_location(32768);
             int icon_index = 0;
-            if (SUCCEEDED(link->GetIconLocation(icon_location,
-                    static_cast<int>(std::size(icon_location)), &icon_index))
+            if (SUCCEEDED(link->GetIconLocation(icon_location.data(),
+                    static_cast<int>(icon_location.size()), &icon_index))
                 && icon_location[0] != L'\0') {
-                const auto location = normalized_path(icon_location, link_directory);
+                const auto location = normalized_path(icon_location.data(), link_directory);
                 if (auto icon = extract_resource_icon(location, icon_index, size)) return icon;
             }
             target = normalized_path(shortcut_target(link.Get()), link_directory);

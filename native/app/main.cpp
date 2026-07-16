@@ -9,8 +9,9 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <memory>
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int) {
     smk::windows::diagnostic_initialize();
     smk::windows::crash_handler_initialize();
     smk::windows::crash_set_phase(L"ole_initialize");
@@ -44,8 +45,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 #endif
 
         smk::windows::crash_set_phase(L"app_host_run");
-        smk::app::AppHost host;
-        result = host.run(instance, arguments);
+        auto host = std::make_unique<smk::app::AppHost>();
+        result = host->run(instance, arguments);
         smk::windows::crash_set_phase(L"app_host_stopped");
     } catch (...) {
         smk::windows::crash_set_phase(L"caught_cpp_exception");

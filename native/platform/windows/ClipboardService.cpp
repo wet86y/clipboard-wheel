@@ -254,7 +254,8 @@ std::wstring ClipboardService::make_id() {
     GUID guid{};
     if (FAILED(CoCreateGuid(&guid))) return std::to_wstring(GetTickCount64());
     wchar_t text[40]{};
-    StringFromGUID2(guid, text, static_cast<int>(std::size(text)));
+    if (StringFromGUID2(guid, text, static_cast<int>(std::size(text))) == 0)
+        return std::to_wstring(GetTickCount64());
     std::wstring result(text);
     std::erase_if(result, [](wchar_t value) { return value == L'{' || value == L'}' || value == L'-'; });
     return result;

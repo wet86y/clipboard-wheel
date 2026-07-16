@@ -489,6 +489,7 @@ int AppHost::verify_release_bundle(HINSTANCE instance) {
     HRSRC resource = FindResourceW(instance, MAKEINTRESOURCEW(201), RT_RCDATA);
     if (!resource) return 10;
     HGLOBAL loaded = LoadResource(instance, resource);
+    if (!loaded) return 10;
     const DWORD size = SizeofResource(instance, resource);
     const auto* bytes = static_cast<const std::byte*>(LockResource(loaded));
     if (!bytes || size < 128 || std::to_integer<unsigned char>(bytes[0]) != 'M' ||

@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <format>
 #include <utility>
+#include <vector>
 
 namespace smk::windows {
 namespace {
@@ -61,13 +62,15 @@ bool valid_id(const std::wstring& id) {
 }
 
 std::filesystem::path result_path(const std::wstring& id) {
-    wchar_t local[32768]{};
-    GetEnvironmentVariableW(L"LOCALAPPDATA", local, static_cast<DWORD>(std::size(local)));
-    return std::filesystem::path(local) / L"超级中键" / L"shortcut-drop-handoff" / (id + L".result");
+    std::vector<wchar_t> local(32768);
+    const DWORD count = GetEnvironmentVariableW(L"LOCALAPPDATA", local.data(), static_cast<DWORD>(local.size()));
+    if (!count || count >= local.size()) return {};
+    return std::filesystem::path(local.data()) / L"超级中键" / L"shortcut-drop-handoff" / (id + L".result");
 }
 
 bool write_result(const std::wstring& id, const std::wstring& value) {
     const auto target = result_path(id);
+    if (target.empty()) return false;
     std::error_code ignored;
     std::filesystem::create_directories(target.parent_path(), ignored);
     const auto temporary = target.wstring() + L".tmp." + std::to_wstring(GetCurrentProcessId());
@@ -367,11 +370,18 @@ std::optional<std::wstring> read_shortcut_drop_result(const std::wstring& id) {
         FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) return std::nullopt;
     LARGE_INTEGER size{};
-    GetFileSizeEx(file, &size);
+    constexpr LONGLONG kMaximumResultBytes = 64 * 1024;
+    if (!GetFileSizeEx(file, &size) || size.QuadPart < 0 || size.QuadPart > kMaximumResultBytes ||
+        size.QuadPart % sizeof(wchar_t) != 0) {
+        CloseHandle(file);
+        return std::nullopt;
+    }
     std::wstring result(static_cast<std::size_t>(size.QuadPart / sizeof(wchar_t)), L'\0');
     DWORD read = 0;
-    ReadFile(file, result.data(), static_cast<DWORD>(result.size() * sizeof(wchar_t)), &read, nullptr);
+    const bool read_ok = ReadFile(file, result.data(), static_cast<DWORD>(result.size() * sizeof(wchar_t)),
+        &read, nullptr) != FALSE;
     CloseHandle(file);
+    if (!read_ok || read != size.QuadPart) return std::nullopt;
     result.resize(read / sizeof(wchar_t));
     return result;
 }

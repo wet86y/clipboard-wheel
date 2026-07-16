@@ -14,6 +14,7 @@ std::vector<std::byte> load_updater_stub(HINSTANCE instance) {
     HRSRC resource = FindResourceW(instance, MAKEINTRESOURCEW(kUpdaterStubResource), RT_RCDATA);
     if (!resource) return {};
     HGLOBAL loaded = LoadResource(instance, resource);
+    if (!loaded) return {};
     const DWORD size = SizeofResource(instance, resource);
     const auto* bytes = static_cast<const std::byte*>(LockResource(loaded));
     return bytes && size ? std::vector<std::byte>(bytes, bytes + size) : std::vector<std::byte>{};

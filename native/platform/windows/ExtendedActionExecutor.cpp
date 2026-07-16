@@ -21,6 +21,7 @@
 #include <set>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace smk::windows {
 namespace {
@@ -333,13 +334,13 @@ std::optional<ShortcutLaunchInfo> resolve_shortcut(const std::wstring& shortcut_
             IID_PPV_ARGS(link.GetAddressOf())))) return std::nullopt;
     ComPtr<IPersistFile> persist;
     if (FAILED(link.As(&persist)) || FAILED(persist->Load(shortcut_path.c_str(), STGM_READ))) return std::nullopt;
-    wchar_t target[32768]{}, arguments[32768]{}, working[32768]{};
+    std::vector<wchar_t> target(32768), arguments(32768), working(32768);
     WIN32_FIND_DATAW data{};
-    if (FAILED(link->GetPath(target, static_cast<int>(std::size(target)), &data, SLGP_RAWPATH)) || !target[0])
+    if (FAILED(link->GetPath(target.data(), static_cast<int>(target.size()), &data, SLGP_RAWPATH)) || !target[0])
         return std::nullopt;
-    (void)link->GetArguments(arguments, static_cast<int>(std::size(arguments)));
-    (void)link->GetWorkingDirectory(working, static_cast<int>(std::size(working)));
-    return ShortcutLaunchInfo{target, arguments, working};
+    (void)link->GetArguments(arguments.data(), static_cast<int>(arguments.size()));
+    (void)link->GetWorkingDirectory(working.data(), static_cast<int>(working.size()));
+    return ShortcutLaunchInfo{target.data(), arguments.data(), working.data()};
 }
 
 std::wstring build_browser_launch_arguments(

@@ -30,8 +30,10 @@ std::array<wchar_t, 32'768> crash_dump_path_buffer{};
 #endif
 
 std::wstring crash_directory() {
-    wchar_t local[32'768]{};
-    GetEnvironmentVariableW(L"LOCALAPPDATA", local, static_cast<DWORD>(std::size(local)));
+    std::wstring local(32'768, L'\0');
+    const DWORD count = GetEnvironmentVariableW(L"LOCALAPPDATA", local.data(), static_cast<DWORD>(local.size()));
+    if (!count || count >= local.size()) return {};
+    local.resize(count);
     return (std::filesystem::path(local) / L"超级中键" / L"crash").wstring();
 }
 
@@ -54,8 +56,12 @@ void rotate_dumps() noexcept {
 }
 
 void ensure_crash_directory(wchar_t* output, std::size_t capacity) noexcept {
-    GetEnvironmentVariableW(L"LOCALAPPDATA", crash_local_buffer.data(),
+    const DWORD count = GetEnvironmentVariableW(L"LOCALAPPDATA", crash_local_buffer.data(),
         static_cast<DWORD>(crash_local_buffer.size()));
+    if (!count || count >= crash_local_buffer.size()) {
+        if (capacity) output[0] = L'\0';
+        return;
+    }
     _snwprintf_s(crash_app_buffer.data(), crash_app_buffer.size(), _TRUNCATE,
         L"%s\\超级中键", crash_local_buffer.data());
     CreateDirectoryW(crash_app_buffer.data(), nullptr);
@@ -67,6 +73,7 @@ void write_record(DWORD exception_code, EXCEPTION_POINTERS* pointers) noexcept {
     if (writing.test_and_set(std::memory_order_acq_rel)) return;
     auto* directory = crash_directory_buffer.data();
     ensure_crash_directory(directory, crash_directory_buffer.size());
+    if (!directory[0]) return;
     SYSTEMTIME now{};
     GetLocalTime(&now);
     wchar_t stem[256]{};

@@ -18,7 +18,8 @@ constexpr DWORD kBiAlphaBitfields = 6;
 ComPtr<IWICImagingFactory> wic_factory() {
     ComPtr<IWICImagingFactory> factory;
     if (FAILED(CoCreateInstance(CLSID_WICImagingFactory2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.GetAddressOf()))))
-        CoCreateInstance(CLSID_WICImagingFactory1, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.GetAddressOf()));
+        if (FAILED(CoCreateInstance(CLSID_WICImagingFactory1, nullptr, CLSCTX_INPROC_SERVER,
+                IID_PPV_ARGS(factory.GetAddressOf())))) return {};
     return factory;
 }
 
@@ -54,7 +55,7 @@ std::vector<std::uint8_t> stream_bytes(IStream* stream) {
         if (stat.cbSize.QuadPart > static_cast<LONGLONG>(ImageClipboardPayload::kMaxEncodedBytes)) return {};
         result.reserve(static_cast<std::size_t>(stat.cbSize.QuadPart));
     }
-    std::array<std::uint8_t, 64U * 1024U> buffer{};
+    std::vector<std::uint8_t> buffer(64U * 1024U);
     for (;;) {
         ULONG read = 0;
         const HRESULT status = stream->Read(buffer.data(), static_cast<ULONG>(buffer.size()), &read);

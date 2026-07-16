@@ -98,7 +98,10 @@ std::string sanitize(std::wstring_view details) {
 }
 
 std::filesystem::path local_log_directory() {
-    wchar_t local[32768]{}; GetEnvironmentVariableW(L"LOCALAPPDATA", local, static_cast<DWORD>(std::size(local)));
+    std::wstring local(32768, L'\0');
+    const DWORD count = GetEnvironmentVariableW(L"LOCALAPPDATA", local.data(), static_cast<DWORD>(local.size()));
+    if (!count || count >= local.size()) return {};
+    local.resize(count);
     return std::filesystem::path(local) / L"超级中键" / L"logs";
 }
 
@@ -146,7 +149,9 @@ void writer_loop() {
 
 void diagnostic_initialize() noexcept {
     try {
-        logger.directory = local_log_directory(); rotate_old_files(); if (!open_part()) return;
+        logger.directory = local_log_directory();
+        if (logger.directory.empty()) return;
+        rotate_old_files(); if (!open_part()) return;
         logger.stopping = false; logger.writer = std::thread(writer_loop);
         wchar_t module[MAX_PATH]{};
         GetModuleFileNameW(nullptr, module, static_cast<DWORD>(std::size(module)));

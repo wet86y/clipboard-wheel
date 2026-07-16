@@ -1670,7 +1670,8 @@ void SettingsWindow::start_shortcut_drop_handoff() {
     const auto& slot = settings_.wheel.extended_wheel.slots[static_cast<std::size_t>(selected_slot_)];
     if (!smk::windows::is_administrator() || SendMessageW(slot_mode_, CB_GETCURSEL, 0, 0) != 1 || !slot.shortcut_path.empty()) return;
     GUID guid{}; if (FAILED(CoCreateGuid(&guid))) return;
-    wchar_t value[40]{}; StringFromGUID2(guid, value, static_cast<int>(std::size(value)));
+    wchar_t value[40]{};
+    if (StringFromGUID2(guid, value, static_cast<int>(std::size(value))) == 0) return;
     pending_handoff_id_ = value;
     std::erase_if(pending_handoff_id_, [](wchar_t ch) { return ch == L'{' || ch == L'}' || ch == L'-'; });
     std::wstring error;
