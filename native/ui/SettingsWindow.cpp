@@ -380,6 +380,7 @@ bool SettingsWindow::create(HINSTANCE instance, SaveCallback save_callback,
 void SettingsWindow::show(const smk::core::AppSettings& settings) {
     cancel_hotkey_recording();
     settings_ = settings;
+    committed_settings_ = settings;
     page_scroll_.fill(0.0);
     load_controls();
     if (update_controller_) apply_update_state(update_controller_->state());
@@ -744,8 +745,6 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
             if (id == kUpdateCancel) { update_controller_->cancel(); return 0; }
             if (id == kUpdateAcceleration) {
                 animate_switch(about_acceleration_);
-                settings_.update.use_acceleration_nodes = Button_GetCheck(about_acceleration_) == BST_CHECKED;
-                update_controller_->set_acceleration(settings_.update.use_acceleration_nodes);
                 return 0;
             }
         }
@@ -975,7 +974,7 @@ void SettingsWindow::create_basic_page() {
     radius_ = make_control(instance_, page, TRACKBAR_CLASSW, L"", TBS_NOTICKS | WS_TABSTOP, kRadius);
     dead_zone_ = make_control(instance_, page, TRACKBAR_CLASSW, L"", TBS_NOTICKS | WS_TABSTOP, kDeadZone);
     opacity_ = make_control(instance_, page, TRACKBAR_CLASSW, L"", TBS_NOTICKS | WS_TABSTOP, kOpacity);
-    SendMessageW(radius_, TBM_SETRANGE, TRUE, MAKELPARAM(100, 300)); SendMessageW(radius_, TBM_SETTICFREQ, 10, 0);
+    SendMessageW(radius_, TBM_SETRANGE, TRUE, MAKELPARAM(80, 360)); SendMessageW(radius_, TBM_SETTICFREQ, 10, 0);
     SendMessageW(dead_zone_, TBM_SETRANGE, TRUE, MAKELPARAM(0, 120)); SendMessageW(dead_zone_, TBM_SETTICFREQ, 5, 0);
     SendMessageW(opacity_, TBM_SETRANGE, TRUE, MAKELPARAM(20, 100)); SendMessageW(opacity_, TBM_SETTICFREQ, 5, 0);
     for (std::size_t index = 0; index < 3; ++index) {
@@ -1205,7 +1204,7 @@ void SettingsWindow::load_controls() {
     Button_SetCheck(shape_rectangle_, settings_.wheel.shape == L"rectangle" ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(shape_circle_, settings_.wheel.shape == L"rectangle" ? BST_UNCHECKED : BST_CHECKED);
     refresh_sector_items(false);
-    SendMessageW(radius_, TBM_SETPOS, TRUE, static_cast<LPARAM>(std::clamp(settings_.wheel.radius, 100.0, 300.0)));
+    SendMessageW(radius_, TBM_SETPOS, TRUE, static_cast<LPARAM>(std::clamp(settings_.wheel.radius, 80.0, 360.0)));
     SendMessageW(dead_zone_, TBM_SETPOS, TRUE, static_cast<LPARAM>(std::clamp(settings_.wheel.inner_dead_zone_radius, 0.0, 120.0)));
     SendMessageW(opacity_, TBM_SETPOS, TRUE, static_cast<LPARAM>(settings_.wheel.opacity * 100.0));
     Button_SetCheck(quick_copy_, settings_.wheel.quick_copy ? BST_CHECKED : BST_UNCHECKED);
@@ -1225,7 +1224,6 @@ void SettingsWindow::load_controls() {
 
 void SettingsWindow::save_controls() {
     save_current_slot();
-    const bool previous_administrator_mode = settings_.run_as_administrator_enabled;
     settings_.wheel.shape = Button_GetCheck(shape_rectangle_) == BST_CHECKED ? L"rectangle" : L"circle";
     wchar_t sector[8]{}; GetWindowTextW(sectors_, sector, static_cast<int>(std::size(sector)));
     settings_.wheel.sector_count = _wtoi(sector);
@@ -1243,13 +1241,16 @@ void SettingsWindow::save_controls() {
     SMK_DIAGNOSTIC_EVENT("settings.save", std::format(L"shape={} sectors={} radius={} dead={} opacity={:.2f} extended={}",
         settings_.wheel.shape, settings_.wheel.sector_count, settings_.wheel.radius,
         settings_.wheel.inner_dead_zone_radius, settings_.wheel.opacity, settings_.wheel.extended_wheel.enabled));
-    if (!save_ || save_(settings_)) {
+    const auto accepted = save_ ? save_(settings_) : std::optional<smk::core::AppSettings>(settings_);
+    if (accepted) {
+        settings_ = *accepted;
+        committed_settings_ = *accepted;
+        load_controls();
         ShowWindow(window_, SW_HIDE);
     } else {
-        settings_.run_as_administrator_enabled = previous_administrator_mode;
-        Button_SetCheck(administrator_, previous_administrator_mode ? BST_CHECKED : BST_UNCHECKED);
-        set_switch_value(administrator_, previous_administrator_mode);
-        SetWindowTextW(admin_status_, L"权限模式切换失败，已恢复原设置。");
+        settings_ = committed_settings_;
+        load_controls();
+        SetWindowTextW(admin_status_, L"设置文件保存失败，请重试。");
         InvalidateRect(pages_[0], nullptr, FALSE);
     }
 }
@@ -2057,7 +2058,7 @@ void SettingsWindow::paint_preview() {
         target->Clear(color(0x0A1629));
         update_preview_visual_layout();
         const smk::core::VisualPoint center = preview_surface_center_;
-        const double configured_radius = std::max(100.0, static_cast<double>(SendMessageW(radius_, TBM_GETPOS, 0, 0)));
+        const double configured_radius = std::max(80.0, static_cast<double>(SendMessageW(radius_, TBM_GETPOS, 0, 0)));
         const double configured_dead = std::clamp(static_cast<double>(SendMessageW(dead_zone_, TBM_GETPOS, 0, 0)), 0.0, configured_radius - 20.0);
         const auto logical_to_preview = D2D1::Matrix3x2F::Scale(
             D2D1::SizeF(static_cast<float>(preview_scale_), static_cast<float>(preview_scale_)))

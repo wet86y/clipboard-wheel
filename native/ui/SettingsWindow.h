@@ -16,13 +16,14 @@
 
 #include <array>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace smk::ui {
 
 class SettingsWindow final {
 public:
-    using SaveCallback = std::function<bool(const smk::core::AppSettings&)>;
+    using SaveCallback = std::function<std::optional<smk::core::AppSettings>(const smk::core::AppSettings&)>;
 
     ~SettingsWindow();
     bool create(HINSTANCE instance, SaveCallback save, smk::updater::UpdateController* update_controller,
@@ -203,6 +204,7 @@ private:
     };
     std::array<SwitchAnimation, 6> switch_animations_{};
     smk::core::AppSettings settings_{};
+    smk::core::AppSettings committed_settings_{};
     smk::core::ExtendedWheelVisualLayout preview_visual_layout_{};
     smk::core::VisualPoint preview_surface_center_{};
     double preview_scale_ = 1.0;

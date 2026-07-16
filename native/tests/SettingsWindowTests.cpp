@@ -237,7 +237,8 @@ int main() {
     {
         smk::ui::SettingsWindow settings;
         expect(settings.create(GetModuleHandleW(nullptr), [&](const smk::core::AppSettings& value) {
-            saved = true; saved_settings = value; return allow_save;
+            saved = true; saved_settings = value;
+            return allow_save ? std::optional<smk::core::AppSettings>(value) : std::nullopt;
         }, &update_controller, L"2.0.0（测试）"),
             "settings window creates");
         smk::core::AppSettings model;

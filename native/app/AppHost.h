@@ -16,6 +16,7 @@
 #include <windows.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,7 +41,7 @@ private:
     void toggle_selected_lock();
     void toggle_enabled();
     void show_settings();
-    bool save_settings(const smk::core::AppSettings& settings);
+    std::optional<smk::core::AppSettings> save_settings(const smk::core::AppSettings& settings);
     static std::wstring executable_path();
     static bool write_update_health_marker(const std::vector<std::wstring>& arguments);
     static int verify_release_bundle(HINSTANCE instance);

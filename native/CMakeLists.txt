@@ -160,4 +160,12 @@ if(BUILD_TESTING)
     target_compile_options(super_middle_key_native_settings_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
     target_link_libraries(super_middle_key_native_settings_tests PRIVATE super_middle_key_ui ole32 user32)
     add_test(NAME native_settings_window COMMAND super_middle_key_native_settings_tests)
+
+    add_executable(super_middle_key_native_settings_store_tests
+        tests/SettingsStoreTests.cpp
+    )
+    target_compile_definitions(super_middle_key_native_settings_store_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(super_middle_key_native_settings_store_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
+    target_link_libraries(super_middle_key_native_settings_store_tests PRIVATE super_middle_key_windows runtimeobject)
+    add_test(NAME native_settings_store COMMAND super_middle_key_native_settings_store_tests)
 endif()

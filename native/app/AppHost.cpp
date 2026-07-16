@@ -376,16 +376,33 @@ void AppHost::toggle_enabled() {
 
 void AppHost::show_settings() { settings_window_.show(settings_); }
 
-bool AppHost::save_settings(const smk::core::AppSettings& settings) {
+std::optional<smk::core::AppSettings> AppHost::save_settings(const smk::core::AppSettings& settings) {
     const auto previous = settings_;
-    settings_ = settings;
+    auto accepted = settings;
+    smk::core::normalize_settings(accepted);
     std::wstring error;
-    if (!settings_store_.save(settings_, error)) {
-        MessageBoxW(nullptr, error.c_str(), L"超级中键", MB_OK | MB_ICONERROR);
-        settings_ = previous;
-        return false;
+    std::wstring warning;
+    const bool auto_start_changed = accepted.auto_start_enabled != previous.auto_start_enabled;
+    bool auto_start_applied = false;
+    if (auto_start_changed) {
+        auto_start_applied = smk::windows::apply_auto_start(
+            accepted.auto_start_enabled, executable_path(), error);
+        if (!auto_start_applied) {
+            accepted.auto_start_enabled = previous.auto_start_enabled;
+            warning = error;
+        }
     }
-    (void)smk::windows::apply_auto_start(settings_.auto_start_enabled, executable_path(), error);
+
+    if (!settings_store_.save(accepted, error)) {
+        if (auto_start_applied) {
+            std::wstring rollback_error;
+            (void)smk::windows::apply_auto_start(previous.auto_start_enabled, executable_path(), rollback_error);
+        }
+        MessageBoxW(nullptr, error.c_str(), L"超级中键", MB_OK | MB_ICONERROR);
+        return std::nullopt;
+    }
+
+    settings_ = accepted;
     enabled_ = settings_.mouse.middle_button_capture_enabled;
     if (mouse_hook_) {
         mouse_hook_->set_enabled(enabled_);
@@ -400,13 +417,15 @@ bool AppHost::save_settings(const smk::core::AppSettings& settings) {
             std::wstring ignored;
             (void)settings_store_.save(settings_, ignored);
             MessageBoxW(nullptr, error.c_str(), L"超级中键", MB_OK | MB_ICONWARNING);
-            return false;
+            accepted = settings_;
+        } else {
+            cancel_wheel_no_action();
+            if (mouse_hook_) mouse_hook_->suspend();
+            PostQuitMessage(0);
         }
-        cancel_wheel_no_action();
-        if (mouse_hook_) mouse_hook_->suspend();
-        PostQuitMessage(0);
     }
-    return true;
+    if (!warning.empty()) MessageBoxW(nullptr, warning.c_str(), L"超级中键", MB_OK | MB_ICONWARNING);
+    return accepted;
 }
 
 std::wstring AppHost::executable_path() {
