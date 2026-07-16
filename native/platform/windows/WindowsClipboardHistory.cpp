@@ -133,8 +133,8 @@ void WindowsClipboardHistory::load_on_worker(std::stop_token stop_token, std::si
                         std::vector<std::uint8_t> bytes(size);
                         reader.ReadBytes(winrt::array_view<std::uint8_t>(bytes));
                         if (const auto image = normalize_png_payload(bytes)) {
-                            entry.image_png_bytes = image->png;
-                            entry.preview_image_png_bytes = image->preview_png;
+                            entry.image_png_bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(image->png));
+                            entry.preview_image_png_bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(image->preview_png));
                             entry.image_hash = image->sha256;
                             entry.image_width = image->width;
                             entry.image_height = image->height;

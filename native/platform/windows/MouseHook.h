@@ -153,6 +153,7 @@ private:
     std::atomic_uint32_t generation_{0};
     std::atomic_uint64_t heartbeat_tick_{0};
     std::atomic_uint64_t move_sequence_{0};
+    std::atomic_uint64_t posted_move_sequence_{0};
     std::atomic_bool move_pending_{false};
     std::array<std::atomic_long, 6> event_x_{};
     std::array<std::atomic_long, 6> event_y_{};

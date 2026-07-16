@@ -219,6 +219,23 @@ void history_tests() {
     expect(history.entries().size() == 1 && history.entries()[0].id == L"b", "clear retains locked entries");
     history.clear();
     expect(history.entries().empty(), "tray clear history matches the managed app and removes locked entries too");
+
+    smk::core::ClipboardEntry image;
+    image.id = L"image";
+    image.is_image_content = true;
+    image.image_png_bytes = std::make_shared<const std::vector<std::uint8_t>>(
+        std::vector<std::uint8_t>(4U * 1024U * 1024U, static_cast<std::uint8_t>(0x5A)));
+    image.preview_image_png_bytes = std::make_shared<const std::vector<std::uint8_t>>(
+        std::vector<std::uint8_t>(1024U, static_cast<std::uint8_t>(0x2A)));
+    const auto original = image.image_png_bytes.get();
+    const auto preview = image.preview_image_png_bytes.get();
+    history.add_or_promote(std::move(image));
+    const auto snapshot = history.snapshot_for_wheel(3);
+    const auto wheel_slots = smk::core::build_wheel_slots(snapshot, 4, true);
+    expect(snapshot.front().image_png_bytes.get() == original
+        && snapshot.front().preview_image_png_bytes.get() == preview
+        && wheel_slots.front().entry->image_png_bytes.get() == original,
+        "history and wheel snapshots share immutable image bytes instead of copying large payloads");
 }
 
 void paste_tests() {

@@ -560,13 +560,15 @@ void WheelWindow::rebuild_image_cache() {
     for (std::size_t index = 0; index < slots_.size(); ++index) {
         if (!slots_[index].entry || !slots_[index].entry->is_image_content) continue;
         auto& entry = *slots_[index].entry;
-        auto& png = entry.preview_image_png_bytes.empty() ? entry.image_png_bytes : entry.preview_image_png_bytes;
+        if (!entry.has_image_preview()) continue;
+        const auto& png = entry.preview_image_bytes();
         Microsoft::WRL::ComPtr<IWICStream> stream;
         Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
         Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
         Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
         if (SUCCEEDED(wic_factory_->CreateStream(stream.GetAddressOf()))
-            && SUCCEEDED(stream->InitializeFromMemory(png.data(), static_cast<DWORD>(png.size())))
+            && SUCCEEDED(stream->InitializeFromMemory(
+                const_cast<BYTE*>(png.data()), static_cast<DWORD>(png.size())))
             && SUCCEEDED(wic_factory_->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf()))
             && SUCCEEDED(decoder->GetFrame(0, frame.GetAddressOf()))
             && SUCCEEDED(wic_factory_->CreateFormatConverter(converter.GetAddressOf()))
@@ -886,7 +888,8 @@ bool WheelWindow::render_frame() {
         if (ensure_surface(width, height)) {
             rebuild_image_cache();
             rebuild_visual_cache();
-            PostMessageW(window_, kRenderMessage, static_cast<WPARAM>(visual_generation_), 0);
+            return PostMessageW(window_, kRenderMessage,
+                static_cast<WPARAM>(visual_generation_), 0) != FALSE;
         }
         return false;
     }

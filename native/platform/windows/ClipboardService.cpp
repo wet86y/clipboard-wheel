@@ -99,7 +99,7 @@ std::wstring read_stream_text(IStream* stream, bool unicode, UINT code_page) {
     return decode_text_bytes(bytes.data(), bytes.size(), unicode, code_page);
 }
 
-void send_ctrl_v() {
+bool send_ctrl_v() {
     INPUT inputs[4]{};
     inputs[0].type = INPUT_KEYBOARD;
     inputs[0].ki.wVk = VK_CONTROL;
@@ -109,7 +109,17 @@ void send_ctrl_v() {
     inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
     inputs[3] = inputs[0];
     inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
-    SendInput(4, inputs, sizeof(INPUT));
+    const UINT sent = SendInput(4, inputs, sizeof(INPUT));
+    if (sent == 4) return true;
+    INPUT releases[2]{};
+    releases[0].type = INPUT_KEYBOARD;
+    releases[0].ki.wVk = 'V';
+    releases[0].ki.dwFlags = KEYEVENTF_KEYUP;
+    releases[1].type = INPUT_KEYBOARD;
+    releases[1].ki.wVk = VK_CONTROL;
+    releases[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    (void)SendInput(2, releases, sizeof(INPUT));
+    return false;
 }
 
 } // namespace
@@ -133,11 +143,14 @@ bool ClipboardService::start(HINSTANCE instance) {
 
 void ClipboardService::stop() {
     if (window_) {
+        KillTimer(window_, kRetryTimer);
+        KillTimer(window_, kSendPasteTimer);
         KillTimer(window_, kCaptureTimer);
         KillTimer(window_, kCaptureRetryTimer);
         capture_retry_state_.cancel();
         capture_coalescer_.cancel();
         RemoveClipboardFormatListener(window_);
+        if (pending_entry_ || clipboard_replaced_) fail_pending_paste(L"shutdown");
         DestroyWindow(window_);
         window_ = nullptr;
     }
@@ -192,7 +205,17 @@ LRESULT ClipboardService::handle_message(UINT message, WPARAM wparam, LPARAM lpa
     if (message == kAttemptPasteMessage) { (void)attempt_pending_paste(); return 0; }
     if (message == WM_TIMER && wparam == kRetryTimer) { (void)attempt_pending_paste(); return 0; }
     if (message == WM_TIMER && wparam == kSendPasteTimer) {
-        KillTimer(window_, kSendPasteTimer); send_ctrl_v(); return 0;
+        KillTimer(window_, kSendPasteTimer);
+        if (!paste_target_ || !IsWindow(paste_target_) || GetForegroundWindow() != paste_target_) {
+            fail_pending_paste(L"target_changed", ERROR_INVALID_WINDOW_HANDLE);
+        } else if (!send_ctrl_v()) {
+            fail_pending_paste(L"send_input", GetLastError());
+        } else {
+            original_clipboard_.Reset();
+            clipboard_replaced_ = false;
+            paste_target_ = nullptr;
+        }
+        return 0;
     }
     if (message == WM_TIMER && wparam == kCaptureTimer) {
         KillTimer(window_, kCaptureTimer);
@@ -274,8 +297,8 @@ std::optional<smk::core::ClipboardEntry> ClipboardService::create_entry_from_dat
     entry.looks_like_single_cell = !entry.plain_text.empty() && entry.plain_text.find_first_of(L"\t\r\n") == std::wstring::npos;
     if (capture_images && !entry.looks_like_spreadsheet) {
         if (const auto image = read_image_payload(data)) {
-            entry.image_png_bytes = image->png;
-            entry.preview_image_png_bytes = image->preview_png;
+            entry.image_png_bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(image->png));
+            entry.preview_image_png_bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(image->preview_png));
             entry.image_hash = image->sha256;
             entry.image_width = image->width;
             entry.image_height = image->height;
@@ -286,7 +309,7 @@ std::optional<smk::core::ClipboardEntry> ClipboardService::create_entry_from_dat
     entry.is_image_content = should_capture_as_image(entry);
     entry.display_text = entry.is_image_content ? L"[图片]" : entry.plain_text.substr(0, std::min<std::size_t>(entry.plain_text.size(), 80));
     if (entry.plain_text.empty() && entry.html_text.empty() && entry.rtf_text.empty()
-        && entry.csv_text.empty() && entry.image_png_bytes.empty()) return std::nullopt;
+        && entry.csv_text.empty() && !entry.has_image()) return std::nullopt;
     return entry;
 }
 
@@ -297,14 +320,28 @@ void ClipboardService::schedule_capture_retry() {
 }
 
 bool ClipboardService::paste_entry(const smk::core::ClipboardEntry& entry, smk::core::PasteMode requested) {
+    if (!window_) return false;
+    if (pending_entry_ || clipboard_replaced_) fail_pending_paste(L"superseded");
+    const HWND target = GetForegroundWindow();
+    if (!target || !IsWindow(target)) {
+        SMK_DIAGNOSTIC_EVENT("clipboard.paste_failed", L"stage=target_invalid");
+        return false;
+    }
     pending_entry_ = entry;
     pending_mode_ = smk::core::resolve_paste_mode(entry, requested);
     pending_started_ = GetTickCount64();
     suppress_capture_until_ = pending_started_ + kRetryTimeoutMs + 250;
     capture_coalescer_.cancel();
     capture_retry_state_.cancel();
-    if (window_) { KillTimer(window_, kCaptureTimer); KillTimer(window_, kCaptureRetryTimer); }
-    PostMessageW(window_, kAttemptPasteMessage, 0, 0);
+    paste_target_ = target;
+    clipboard_replaced_ = false;
+    original_clipboard_.Reset();
+    KillTimer(window_, kCaptureTimer);
+    KillTimer(window_, kCaptureRetryTimer);
+    if (!PostMessageW(window_, kAttemptPasteMessage, 0, 0)) {
+        fail_pending_paste(L"post_attempt", GetLastError());
+        return false;
+    }
     return true;
 }
 
@@ -318,25 +355,78 @@ bool ClipboardService::clipboard_already_has_plain_text(const smk::core::Clipboa
 
 bool ClipboardService::attempt_pending_paste() {
     if (!pending_entry_) { KillTimer(window_, kRetryTimer); return false; }
+    if (!paste_target_ || !IsWindow(paste_target_) || GetForegroundWindow() != paste_target_) {
+        fail_pending_paste(L"target_changed", ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
     const bool requires_formatted = smk::core::requires_formatted_clipboard_payload(
         *pending_entry_, pending_mode_);
     bool written = !requires_formatted && clipboard_already_has_plain_text(*pending_entry_);
     if (!written) {
+        if (!original_clipboard_) {
+            IDataObject* original = nullptr;
+            const HRESULT original_result = OleGetClipboard(&original);
+            if (FAILED(original_result) || !original) {
+                if (GetTickCount64() - pending_started_ >= kRetryTimeoutMs) {
+                    fail_pending_paste(L"capture_original", static_cast<DWORD>(original_result));
+                    return false;
+                }
+                if (!SetTimer(window_, kRetryTimer, kRetryIntervalMs, nullptr))
+                    fail_pending_paste(L"retry_timer", GetLastError());
+                return false;
+            }
+            original_clipboard_.Attach(original);
+        }
         auto data = create_clipboard_data_object(*pending_entry_, pending_mode_);
         const HRESULT result = data ? OleSetClipboard(data.Get()) : E_OUTOFMEMORY;
-        if (data && SUCCEEDED(result)) { owned_clipboard_ = std::move(data); written = true; }
+        if (data && SUCCEEDED(result)) {
+            owned_clipboard_ = std::move(data);
+            clipboard_replaced_ = true;
+            written = true;
+        }
         else SMK_DIAGNOSTIC_EVENT("clipboard.paste_retry", std::format(L"elapsed={} hr=0x{:08X}",
             GetTickCount64() - pending_started_, static_cast<unsigned>(result)));
     }
     if (written) {
         suppress_capture_until_ = GetTickCount64() + 300;
         pending_entry_.reset(); KillTimer(window_, kRetryTimer);
-        SetTimer(window_, kSendPasteTimer, kRetryIntervalMs, nullptr); return true;
+        if (!SetTimer(window_, kSendPasteTimer, kRetryIntervalMs, nullptr)) {
+            fail_pending_paste(L"send_timer", GetLastError());
+            return false;
+        }
+        return true;
     }
     if (GetTickCount64() - pending_started_ >= kRetryTimeoutMs) {
-        pending_entry_.reset(); KillTimer(window_, kRetryTimer); return false;
+        fail_pending_paste(L"clipboard_timeout");
+        return false;
     }
-    SetTimer(window_, kRetryTimer, kRetryIntervalMs, nullptr); return false;
+    if (!SetTimer(window_, kRetryTimer, kRetryIntervalMs, nullptr))
+        fail_pending_paste(L"retry_timer", GetLastError());
+    return false;
+}
+
+void ClipboardService::restore_original_clipboard() noexcept {
+    if (clipboard_replaced_ && original_clipboard_) {
+        [[maybe_unused]] const HRESULT result = OleSetClipboard(original_clipboard_.Get());
+        SMK_DIAGNOSTIC_EVENT("clipboard.paste_restore", std::format(
+            L"result=0x{:08X}", static_cast<unsigned>(result)));
+    }
+    clipboard_replaced_ = false;
+    original_clipboard_.Reset();
+}
+
+void ClipboardService::fail_pending_paste(std::wstring_view stage, DWORD error) noexcept {
+    if (window_) {
+        KillTimer(window_, kRetryTimer);
+        KillTimer(window_, kSendPasteTimer);
+    }
+    restore_original_clipboard();
+    pending_entry_.reset();
+    paste_target_ = nullptr;
+    (void)stage;
+    (void)error;
+    SMK_DIAGNOSTIC_EVENT("clipboard.paste_failed", std::format(
+        L"stage={} error={}", stage, error));
 }
 
 } // namespace smk::windows

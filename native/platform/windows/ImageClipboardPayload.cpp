@@ -426,7 +426,7 @@ ComPtr<IDataObject> create_image_data_object(const ImageClipboardPayload& payloa
 ComPtr<IDataObject> create_clipboard_data_object(
     const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode) {
     if (entry.is_image_content && entry.has_image()) {
-        const auto payload = normalize_png_payload(entry.image_png_bytes);
+        const auto payload = normalize_png_payload(entry.image_bytes());
         return payload ? create_image_data_object(*payload) : ComPtr<IDataObject>{};
     }
     ComPtr<IDataObject> result;

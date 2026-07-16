@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <string_view>
 
 namespace smk::windows {
 
@@ -100,6 +101,8 @@ private:
     CaptureAttempt capture_current_once();
     void schedule_capture_retry();
     bool attempt_pending_paste();
+    void fail_pending_paste(std::wstring_view stage, DWORD error = ERROR_SUCCESS) noexcept;
+    void restore_original_clipboard() noexcept;
     bool clipboard_already_has_plain_text(const smk::core::ClipboardEntry& entry) const;
 
     HINSTANCE instance_ = nullptr;
@@ -110,11 +113,14 @@ private:
     std::optional<smk::core::ClipboardEntry> pending_entry_;
     smk::core::PasteMode pending_mode_ = smk::core::PasteMode::smart;
     ULONGLONG pending_started_ = 0;
+    HWND paste_target_ = nullptr;
+    bool clipboard_replaced_ = false;
     ULONGLONG suppress_capture_until_ = 0;
     ClipboardUpdateCoalescer capture_coalescer_;
     ClipboardCaptureRetryState capture_retry_state_;
     std::uint64_t scheduled_capture_generation_ = 0;
     Microsoft::WRL::ComPtr<IDataObject> owned_clipboard_;
+    Microsoft::WRL::ComPtr<IDataObject> original_clipboard_;
 };
 
 } // namespace smk::windows

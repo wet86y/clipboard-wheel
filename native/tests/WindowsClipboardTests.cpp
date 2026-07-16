@@ -280,7 +280,8 @@ int main() {
     mixed_image.id = L"browser-image";
     mixed_image.plain_text = L"https://example.test/image.png";
     mixed_image.html_text = L"<img src=\"https://example.test/image.png\">";
-    if (payload) mixed_image.image_png_bytes = payload->png;
+    if (payload) mixed_image.image_png_bytes =
+        std::make_shared<const std::vector<std::uint8_t>>(payload->png);
     expect(smk::windows::should_capture_as_image(mixed_image),
         "browser image payload remains an image when text and HTML fallbacks are present");
     mixed_image.is_image_content = smk::windows::should_capture_as_image(mixed_image);

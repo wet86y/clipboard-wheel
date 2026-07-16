@@ -306,14 +306,17 @@ POINT MouseHook::event_point(MouseHookEvent event) const noexcept {
 }
 
 void MouseHook::complete_move(std::uint32_t generation) noexcept {
-    (void)generation;
-    const auto before = move_sequence_.load(std::memory_order_acquire);
     move_pending_.store(false, std::memory_order_release);
-    if (move_sequence_.load(std::memory_order_acquire) != before &&
-        !move_pending_.exchange(true, std::memory_order_acq_rel)) {
-        PostMessageW(event_target_, kEventMessage,
+    const auto current = move_sequence_.load(std::memory_order_acquire);
+    if (current != posted_move_sequence_.load(std::memory_order_acquire)
+        && !move_pending_.exchange(true, std::memory_order_acq_rel)) {
+        if (PostMessageW(event_target_, kEventMessage,
             static_cast<WPARAM>(MouseHookEvent::mouse_move),
-            generation_.load(std::memory_order_acquire));
+            generation)) {
+            posted_move_sequence_.store(current, std::memory_order_release);
+        } else {
+            move_pending_.store(false, std::memory_order_release);
+        }
     }
 }
 
@@ -488,8 +491,9 @@ bool MouseHook::post_event(MouseHookEvent event, std::uint32_t generation, POINT
     event_x_[index].store(point.x, std::memory_order_release);
     event_y_[index].store(point.y, std::memory_order_release);
     if (event == MouseHookEvent::mouse_move) {
-        move_sequence_.fetch_add(1, std::memory_order_acq_rel);
+        const auto sequence = move_sequence_.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (move_pending_.exchange(true, std::memory_order_acq_rel)) return true;
+        posted_move_sequence_.store(sequence, std::memory_order_release);
     }
     const BOOL posted = PostMessageW(event_target_, kEventMessage,
         static_cast<WPARAM>(event), generation);

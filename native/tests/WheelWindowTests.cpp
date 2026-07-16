@@ -89,13 +89,17 @@ int main() {
         image_entry.plain_text = L"browser fallback text";
         image_entry.html_text = L"<img src=\"browser-image\">";
         image_entry.image_width = image_entry.image_height = 1;
-        image_entry.image_png_bytes = {
+        image_entry.image_png_bytes = std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{
             137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,8,4,0,0,0,
             181,28,12,2,0,0,0,11,73,68,65,84,120,218,99,252,255,31,0,2,235,1,245,143,89,
             148,187,0,0,0,0,73,69,78,68,174,66,96,130,
-        };
+        });
         image_entry.preview_image_png_bytes = image_entry.image_png_bytes;
-        const auto slots = smk::core::build_wheel_slots({entry, image_entry}, settings.wheel.sector_count, true);
+        auto missing_preview = image_entry;
+        missing_preview.id = L"image-without-preview";
+        missing_preview.preview_image_png_bytes.reset();
+        const auto slots = smk::core::build_wheel_slots(
+            {entry, image_entry, missing_preview}, settings.wheel.sector_count, true);
         POINT center{320, 320};
         (void)wheel.show(center, slots, settings);
         expect(wheel.cached_text_line_count_for_testing() >= 2,
@@ -103,7 +107,7 @@ int main() {
         expect(wheel.multiline_text_layout_count_for_testing() == 0,
             "pre-wrapped preview lines cannot wrap again and overlap near the sector edge");
         expect(wheel.cached_image_preview_count_for_testing() == 1,
-            "image preview is decoded and its clipped destination is cached");
+            "wheel decodes only explicit low-resolution previews and never falls back to the original image");
         expect(wheel.nontransparent_slot_count_for_testing() == slots.size(), "initial DIB frame contains every wheel sector");
         pump_for(16);
         expect(wheel.nontransparent_slot_count_for_testing() == slots.size(), "16ms DIB frame contains every wheel sector");
