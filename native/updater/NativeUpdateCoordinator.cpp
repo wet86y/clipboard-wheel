@@ -3,6 +3,7 @@
 #include "platform/windows/DiagnosticLog.h"
 
 #include <format>
+#include <utility>
 
 namespace smk::updater {
 namespace {
@@ -91,29 +92,45 @@ NativeUpdateCoordinator::~NativeUpdateCoordinator() { shutdown(); }
 
 void NativeUpdateCoordinator::set_observer(Observer observer) {
     UpdateViewState current;
-    Observer current_observer;
+    auto replacement = observer ? std::make_shared<ObserverSlot>() : nullptr;
+    if (replacement) replacement->observer = std::move(observer);
+    std::shared_ptr<ObserverSlot> previous;
     {
         std::scoped_lock lock(mutex_);
-        observer_ = std::move(observer);
+        previous = std::exchange(observer_slot_, replacement);
         current = state_;
-        current_observer = observer_;
     }
-    if (current_observer) current_observer(current);
+    deactivate_observer(previous);
+    if (replacement) {
+        std::scoped_lock lock(replacement->mutex);
+        if (replacement->active && replacement->observer) replacement->observer(current);
+    }
 }
 
 UpdateViewState NativeUpdateCoordinator::state() const { std::scoped_lock lock(mutex_); return state_; }
 
 void NativeUpdateCoordinator::publish(UpdateViewState value) {
-    Observer observer;
+    std::shared_ptr<ObserverSlot> observer;
     UpdateViewState current;
     {
         std::scoped_lock lock(mutex_);
         if (shutting_down_) return;
         state_ = std::move(value);
         current = state_;
-        observer = observer_;
+        observer = observer_slot_;
     }
-    if (observer) observer(current);
+    if (observer) {
+        std::scoped_lock lock(observer->mutex);
+        if (observer->active && observer->observer) observer->observer(current);
+    }
+}
+
+void NativeUpdateCoordinator::deactivate_observer(
+    const std::shared_ptr<ObserverSlot>& slot) noexcept {
+    if (!slot) return;
+    std::scoped_lock lock(slot->mutex);
+    slot->active = false;
+    slot->observer = {};
 }
 
 void NativeUpdateCoordinator::check() {
@@ -260,12 +277,14 @@ std::wstring NativeUpdateCoordinator::widen(const std::string& text) {
 }
 
 void NativeUpdateCoordinator::shutdown() {
+    std::shared_ptr<ObserverSlot> observer;
     {
         std::scoped_lock lock(mutex_);
         if (shutting_down_) return;
         shutting_down_ = true;
-        observer_ = {};
+        observer = std::exchange(observer_slot_, {});
     }
+    deactivate_observer(observer);
     if (check_thread_.joinable()) check_thread_.request_stop();
     (void)session_.cancel();
     session_.set_changed_callback({});

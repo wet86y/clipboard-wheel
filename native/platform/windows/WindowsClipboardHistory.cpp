@@ -42,7 +42,7 @@ bool contains_table_html(std::wstring_view html) noexcept {
 WindowsClipboardHistory::WindowsClipboardHistory(smk::core::ClipboardHistory& history, ImportedCallback imported)
     : history_(history), imported_(std::move(imported)) {}
 
-WindowsClipboardHistory::~WindowsClipboardHistory() { stop(); }
+WindowsClipboardHistory::~WindowsClipboardHistory() { (void)stop(); }
 
 bool WindowsClipboardHistory::start(HINSTANCE instance, std::size_t limit, bool capture_images) {
     instance_ = instance;
@@ -53,16 +53,43 @@ bool WindowsClipboardHistory::start(HINSTANCE instance, std::size_t limit, bool 
     RegisterClassExW(&wc);
     window_ = CreateWindowExW(0, kWindowClass, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
     if (!window_) return false;
-    worker_ = std::jthread([this, limit, capture_images](std::stop_token stop_token) {
-        load_on_worker(stop_token, limit, capture_images);
-    });
+    stop_source_ = std::stop_source{};
+    worker_state_ = std::make_shared<WorkerState>();
+    worker_state_->window = window_;
+    worker_state_->finished = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!worker_state_->finished) {
+        worker_state_.reset();
+        DestroyWindow(window_);
+        window_ = nullptr;
+        return false;
+    }
+    try {
+        const auto state = worker_state_;
+        const auto token = stop_source_.get_token();
+        worker_ = std::thread([token, limit, capture_images, state] {
+            load_on_worker(token, limit, capture_images, state);
+            SetEvent(state->finished);
+        });
+    } catch (...) {
+        worker_state_.reset();
+        DestroyWindow(window_);
+        window_ = nullptr;
+        return false;
+    }
     return true;
 }
 
-void WindowsClipboardHistory::stop() {
+bool WindowsClipboardHistory::stop(DWORD timeout_ms) noexcept {
+    bool stopped = true;
     if (worker_.joinable()) {
-        worker_.request_stop();
-        worker_.join();
+        stop_source_.request_stop();
+        if (worker_state_) {
+            std::scoped_lock lock(worker_state_->mutex);
+            worker_state_->window = nullptr;
+        }
+        stopped = worker_state_ && WaitForSingleObject(worker_state_->finished, timeout_ms) == WAIT_OBJECT_0;
+        if (stopped) worker_.join();
+        else worker_.detach();
     }
     if (window_) {
         MSG pending{};
@@ -72,6 +99,8 @@ void WindowsClipboardHistory::stop() {
         DestroyWindow(window_);
         window_ = nullptr;
     }
+    worker_state_.reset();
+    return stopped;
 }
 
 LRESULT CALLBACK WindowsClipboardHistory::window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -96,9 +125,13 @@ LRESULT WindowsClipboardHistory::handle_message(UINT message, WPARAM wparam, LPA
     return DefWindowProcW(window_, message, wparam, lparam);
 }
 
-void WindowsClipboardHistory::load_on_worker(std::stop_token stop_token, std::size_t limit, bool capture_images) {
+void WindowsClipboardHistory::load_on_worker(std::stop_token stop_token, std::size_t limit,
+    bool capture_images, const std::shared_ptr<WorkerState>& state) {
     try {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        struct ApartmentGuard {
+            ~ApartmentGuard() { winrt::uninit_apartment(); }
+        } apartment_guard;
         using Clipboard = winrt::Windows::ApplicationModel::DataTransfer::Clipboard;
         using StandardDataFormats = winrt::Windows::ApplicationModel::DataTransfer::StandardDataFormats;
         using Status = winrt::Windows::ApplicationModel::DataTransfer::ClipboardHistoryItemsResultStatus;
@@ -149,9 +182,11 @@ void WindowsClipboardHistory::load_on_worker(std::stop_token stop_token, std::si
             if (!entry.plain_text.empty() || !entry.html_text.empty() || !entry.rtf_text.empty()
                 || entry.has_image()) imported.push_back(std::move(entry));
         }
-        if (imported.empty() || stop_token.stop_requested() || !window_) return;
+        if (imported.empty() || stop_token.stop_requested()) return;
         auto* payload = new std::vector<smk::core::ClipboardEntry>(std::move(imported));
-        if (!PostMessageW(window_, kImportMessage, 0, reinterpret_cast<LPARAM>(payload))) delete payload;
+        std::scoped_lock lock(state->mutex);
+        if (!state->window || !PostMessageW(state->window, kImportMessage, 0,
+                reinterpret_cast<LPARAM>(payload))) delete payload;
     } catch (...) {
         // Clipboard history is an optional enhancement. Runtime clipboard
         // listening remains active when WinRT is unavailable or restricted.

@@ -219,11 +219,7 @@ thread_local MouseHook* MouseHook::active_ = nullptr;
 
 MouseHook::MouseHook(HWND event_target) : event_target_(event_target) {}
 MouseHook::~MouseHook() {
-    if (!stop(1500)) {
-        crash_set_phase(L"hook_destructor_timeout");
-        crash_write_emergency(0xE0000005);
-        TerminateProcess(GetCurrentProcess(), 0xE005);
-    }
+    (void)stop(5000);
 }
 
 bool MouseHook::start() {
@@ -244,19 +240,17 @@ bool MouseHook::start() {
         return false;
     }
     if (WaitForSingleObject(ready_event_, 1500) != WAIT_OBJECT_0) {
-        if (!stop(1500)) {
-            crash_set_phase(L"hook_start_timeout");
-            crash_write_emergency(0xE0000006);
-            TerminateProcess(GetCurrentProcess(), 0xE006);
-        }
-        return false;
+        available_.store(false, std::memory_order_release);
+        (void)PostThreadMessageW(thread_id_, kStopMessage, 0, 0);
+        return true;
     }
     return true;
 }
 
 bool MouseHook::stop(DWORD timeout_ms) noexcept {
     if (!thread_) return true;
-    if (thread_id_) PostThreadMessageW(thread_id_, kStopMessage, 0, 0);
+    if (thread_id_ && !PostThreadMessageW(thread_id_, kStopMessage, 0, 0))
+        (void)PostThreadMessageW(thread_id_, WM_QUIT, 0, 0);
     const DWORD wait = WaitForSingleObject(stopped_event_, timeout_ms);
     const bool stopped = wait == WAIT_OBJECT_0;
     if (stopped) {
@@ -339,6 +333,7 @@ DWORD MouseHook::thread_main() noexcept {
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
             switch (message.message) {
             case kStopMessage: running = false; break;
+            case WM_QUIT: running = false; break;
             case kStateChangedMessage:
                 if (!message.wParam) {
                     const auto cancel = state_.suspend();

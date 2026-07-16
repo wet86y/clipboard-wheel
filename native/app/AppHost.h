@@ -59,7 +59,7 @@ private:
     std::unique_ptr<smk::windows::ClipboardService> clipboard_;
     std::unique_ptr<smk::windows::WindowsClipboardHistory> windows_history_;
     std::unique_ptr<smk::windows::MouseHook> mouse_hook_;
-    smk::windows::ExtendedActionExecutor extended_actions_;
+    std::unique_ptr<smk::windows::ExtendedActionExecutor> extended_actions_;
     std::unique_ptr<smk::updater::NativeUpdateCoordinator> updater_;
     bool enabled_ = true;
     bool lock_changed_ = false;

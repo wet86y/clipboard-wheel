@@ -6,6 +6,8 @@
 #include <windows.h>
 
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <stop_token>
 #include <thread>
 #include <vector>
@@ -34,19 +36,28 @@ public:
     WindowsClipboardHistory& operator=(const WindowsClipboardHistory&) = delete;
 
     bool start(HINSTANCE instance, std::size_t limit, bool capture_images);
-    void stop();
+    bool stop(DWORD timeout_ms = 5000) noexcept;
 
 private:
+    struct WorkerState {
+        std::mutex mutex;
+        HWND window = nullptr;
+        HANDLE finished = nullptr;
+        ~WorkerState() { if (finished) CloseHandle(finished); }
+    };
     static constexpr UINT kImportMessage = WM_APP + 73;
     static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
     LRESULT handle_message(UINT message, WPARAM wparam, LPARAM lparam);
-    void load_on_worker(std::stop_token stop_token, std::size_t limit, bool capture_images);
+    static void load_on_worker(std::stop_token stop_token, std::size_t limit,
+        bool capture_images, const std::shared_ptr<WorkerState>& state);
 
     HINSTANCE instance_ = nullptr;
     HWND window_ = nullptr;
     smk::core::ClipboardHistory& history_;
     ImportedCallback imported_;
-    std::jthread worker_;
+    std::thread worker_;
+    std::stop_source stop_source_;
+    std::shared_ptr<WorkerState> worker_state_;
 };
 
 } // namespace smk::windows

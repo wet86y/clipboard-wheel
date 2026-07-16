@@ -52,6 +52,13 @@ public:
     [[nodiscard]] bool ui_enabled() const noexcept { return ui_enabled_; }
 
 private:
+    struct ObserverSlot {
+        std::recursive_mutex mutex;
+        Observer observer;
+        bool active{true};
+    };
+
+    static void deactivate_observer(const std::shared_ptr<ObserverSlot>& slot) noexcept;
     void apply_snapshot(const desktop_update_kit::SessionSnapshot& snapshot);
     void publish(UpdateViewState state);
     std::vector<std::byte> updater_stub() const;
@@ -66,7 +73,7 @@ private:
     std::jthread check_thread_;
     mutable std::mutex mutex_;
     UpdateViewState state_;
-    Observer observer_;
+    std::shared_ptr<ObserverSlot> observer_slot_;
     std::optional<desktop_update_kit::Release> release_;
     bool shutting_down_{};
     bool installation_started_{};

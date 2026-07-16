@@ -29,6 +29,7 @@ public:
     bool create(HINSTANCE instance, SaveCallback save, smk::updater::UpdateController* update_controller,
         std::wstring version_text);
     void show(const smk::core::AppSettings& settings);
+    void detach_update_controller() noexcept;
 
 private:
     static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);

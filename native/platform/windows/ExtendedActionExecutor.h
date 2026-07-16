@@ -46,7 +46,7 @@ public:
 
     bool start();
     void enqueue(smk::core::ExtendedWheelActionSlot action);
-    void shutdown();
+    bool shutdown(DWORD timeout_ms = 5000) noexcept;
 
 private:
     struct Implementation;
@@ -56,6 +56,7 @@ private:
     std::condition_variable wake_;
     std::deque<smk::core::ExtendedWheelActionSlot> queue_;
     std::thread worker_;
+    HANDLE stopped_event_ = nullptr;
     std::unique_ptr<Implementation> implementation_;
     std::atomic_bool stop_requested_ = false;
     bool stopping_ = false;

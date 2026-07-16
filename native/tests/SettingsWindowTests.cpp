@@ -122,6 +122,7 @@ public:
         state_ = std::move(state);
         if (observer_) observer_(state_);
     }
+    [[nodiscard]] bool has_observer() const noexcept { return static_cast<bool>(observer_); }
 
     int checks = 0;
     int downloads = 0;
@@ -752,6 +753,10 @@ int main() {
             && SendMessageW(administrator, BM_GETCHECK, 0, 0) == previous_admin,
             "failed privilege-mode save keeps the window open and restores the prior switch");
         SendMessageW(window, WM_CLOSE, 0, 0); pump();
+        settings.detach_update_controller();
+        expect(!update_controller.has_observer(),
+            "settings window synchronously detaches its updater observer before teardown");
+        update_controller.emit({});
     }
     OleUninitialize();
     if (!failures) std::cout << "Native settings window tests passed.\n";

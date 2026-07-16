@@ -603,13 +603,19 @@ struct ExtendedActionExecutor::Implementation {
 };
 
 ExtendedActionExecutor::ExtendedActionExecutor() = default;
-ExtendedActionExecutor::~ExtendedActionExecutor() { shutdown(); }
+ExtendedActionExecutor::~ExtendedActionExecutor() {
+    if (worker_.joinable()) (void)shutdown(INFINITE);
+    if (stopped_event_) CloseHandle(stopped_event_);
+}
 
 bool ExtendedActionExecutor::start() {
     std::scoped_lock lock(mutex_);
     if (worker_.joinable()) return true;
     stopping_ = false;
     stop_requested_.store(false, std::memory_order_relaxed);
+    if (!stopped_event_) stopped_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!stopped_event_) return false;
+    ResetEvent(stopped_event_);
     try {
         worker_ = std::thread([this] { worker_main(); });
         return true;
@@ -627,16 +633,18 @@ void ExtendedActionExecutor::enqueue(smk::core::ExtendedWheelActionSlot action) 
     wake_.notify_one();
 }
 
-void ExtendedActionExecutor::shutdown() {
+bool ExtendedActionExecutor::shutdown(DWORD timeout_ms) noexcept {
     {
         std::scoped_lock lock(mutex_);
-        if (!worker_.joinable()) return;
+        if (!worker_.joinable()) return true;
         stopping_ = true;
         stop_requested_.store(true, std::memory_order_relaxed);
         queue_.clear();
     }
     wake_.notify_one();
+    if (WaitForSingleObject(stopped_event_, timeout_ms) != WAIT_OBJECT_0) return false;
     worker_.join();
+    return true;
 }
 
 void ExtendedActionExecutor::worker_main() {
@@ -656,6 +664,7 @@ void ExtendedActionExecutor::worker_main() {
     }
     implementation_.reset();
     if (SUCCEEDED(initialized)) CoUninitialize();
+    SetEvent(stopped_event_);
 }
 
 } // namespace smk::windows

@@ -623,6 +623,13 @@ int main() {
         {static_cast<WORD>(VK_F12), false}, {static_cast<WORD>(VK_F12), true},
         {static_cast<WORD>(VK_SHIFT), true}, {static_cast<WORD>(VK_CONTROL), true},
     };
+    expect(executor.shutdown(5000) && executor.shutdown(0),
+        "extended action shutdown is bounded and idempotent");
+
+    smk::core::ClipboardHistory empty_history(8);
+    smk::windows::WindowsClipboardHistory history_loader(empty_history, [] {});
+    expect(history_loader.stop(0) && history_loader.stop(0),
+        "clipboard history shutdown is safe before start and when repeated");
     expect(key_events == expected_events,
         "extended hotkey presses in configured order and releases in reverse order");
     key_events.clear();

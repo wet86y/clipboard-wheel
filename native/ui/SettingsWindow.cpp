@@ -291,7 +291,7 @@ void draw_line_icon(ID2D1RenderTarget* target, IconKind kind, const UiRect& box,
 } // namespace
 
 SettingsWindow::~SettingsWindow() {
-    if (update_controller_) update_controller_->set_observer({});
+    detach_update_controller();
     hotkey_capture_.stop();
     shortcut_drop_.reset();
     discard_render_resources();
@@ -1252,6 +1252,16 @@ void SettingsWindow::save_controls() {
         load_controls();
         SetWindowTextW(admin_status_, L"设置文件保存失败，请重试。");
         InvalidateRect(pages_[0], nullptr, FALSE);
+    }
+}
+
+void SettingsWindow::detach_update_controller() noexcept {
+    if (update_controller_) update_controller_->set_observer({});
+    update_controller_ = nullptr;
+    if (!window_) return;
+    MSG message{};
+    while (PeekMessageW(&message, window_, kUpdateStateMessage, kUpdateStateMessage, PM_REMOVE)) {
+        delete reinterpret_cast<smk::updater::UpdateViewState*>(message.lParam);
     }
 }
 

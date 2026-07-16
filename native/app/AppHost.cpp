@@ -141,7 +141,8 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
         (void)windows_history_->start(instance, static_cast<std::size_t>(settings_.clipboard.max_history_items), settings_.clipboard.capture_images);
     }
     smk::windows::startup_trace(L"WinRT history scheduled");
-    if (!extended_actions_.start()) {
+    extended_actions_ = std::make_unique<smk::windows::ExtendedActionExecutor>();
+    if (!extended_actions_->start()) {
         smk::windows::startup_trace(L"extended action executor start failed");
         return false;
     }
@@ -176,21 +177,31 @@ void AppHost::shutdown() {
     shutting_down_ = true;
     smk::windows::crash_set_phase(L"app_shutdown");
     smk::windows::startup_trace(L"shutdown begin");
+    const ULONGLONG shutdown_deadline = GetTickCount64() + 5000;
+    const auto remaining_shutdown_ms = [&]() -> DWORD {
+        const ULONGLONG now = GetTickCount64();
+        return now >= shutdown_deadline ? 0 : static_cast<DWORD>(shutdown_deadline - now);
+    };
     cancel_wheel_no_action();
     if (mouse_hook_) {
         mouse_hook_->set_enabled(false);
-        if (!mouse_hook_->stop(1500)) {
-            smk::windows::startup_trace(L"emergency: mouse hook thread did not stop within 1500ms");
-            smk::windows::crash_set_phase(L"hook_shutdown_timeout");
-            smk::windows::crash_write_emergency(0xE0000004);
-            TerminateProcess(GetCurrentProcess(), 0xE001);
+        if (mouse_hook_->stop(remaining_shutdown_ms())) mouse_hook_.reset();
+        else {
+            smk::windows::startup_trace(L"mouse hook stop timed out; retaining isolated worker state until process exit");
+            (void)mouse_hook_.release();
         }
-        mouse_hook_.reset();
     }
     destroy_input_safety_window();
-    extended_actions_.shutdown();
+    if (extended_actions_) {
+        if (extended_actions_->shutdown(remaining_shutdown_ms())) extended_actions_.reset();
+        else (void)extended_actions_.release();
+    }
+    settings_window_.detach_update_controller();
     if (updater_) { updater_->shutdown(); updater_.reset(); }
-    windows_history_.reset();
+    if (windows_history_) {
+        if (windows_history_->stop(remaining_shutdown_ms())) windows_history_.reset();
+        else (void)windows_history_.release();
+    }
     clipboard_.reset();
     tray_.destroy();
     smk::windows::startup_trace(L"shutdown complete");
@@ -340,7 +351,7 @@ void AppHost::finish_wheel(POINT point) {
     wheel_.hide();
     if (lock_changed_) return;
     if (const auto* action = std::get_if<smk::core::ExtendedWheelActionSlot>(&selection)) {
-        extended_actions_.enqueue(*action);
+        if (extended_actions_) extended_actions_->enqueue(*action);
         return;
     }
     const auto* entry = std::get_if<smk::core::ClipboardEntry>(&selection);

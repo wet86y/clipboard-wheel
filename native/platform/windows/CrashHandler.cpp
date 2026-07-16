@@ -21,6 +21,13 @@ std::atomic_uint32_t input_generation{0};
 std::atomic_flag writing = ATOMIC_FLAG_INIT;
 LPTOP_LEVEL_EXCEPTION_FILTER previous_filter = nullptr;
 std::terminate_handler previous_terminate = nullptr;
+std::array<wchar_t, 32'768> crash_directory_buffer{};
+std::array<wchar_t, 32'768> crash_local_buffer{};
+std::array<wchar_t, 32'768> crash_app_buffer{};
+std::array<wchar_t, 32'768> crash_log_path_buffer{};
+#if defined(SMK_DIAGNOSTICS)
+std::array<wchar_t, 32'768> crash_dump_path_buffer{};
+#endif
 
 std::wstring crash_directory() {
     wchar_t local[32'768]{};
@@ -47,19 +54,19 @@ void rotate_dumps() noexcept {
 }
 
 void ensure_crash_directory(wchar_t* output, std::size_t capacity) noexcept {
-    wchar_t local[32'768]{};
-    GetEnvironmentVariableW(L"LOCALAPPDATA", local, static_cast<DWORD>(std::size(local)));
-    wchar_t app[32'768]{};
-    _snwprintf_s(app, _TRUNCATE, L"%s\\超级中键", local);
-    CreateDirectoryW(app, nullptr);
-    _snwprintf_s(output, capacity, _TRUNCATE, L"%s\\crash", app);
+    GetEnvironmentVariableW(L"LOCALAPPDATA", crash_local_buffer.data(),
+        static_cast<DWORD>(crash_local_buffer.size()));
+    _snwprintf_s(crash_app_buffer.data(), crash_app_buffer.size(), _TRUNCATE,
+        L"%s\\超级中键", crash_local_buffer.data());
+    CreateDirectoryW(crash_app_buffer.data(), nullptr);
+    _snwprintf_s(output, capacity, _TRUNCATE, L"%s\\crash", crash_app_buffer.data());
     CreateDirectoryW(output, nullptr);
 }
 
 void write_record(DWORD exception_code, EXCEPTION_POINTERS* pointers) noexcept {
     if (writing.test_and_set(std::memory_order_acq_rel)) return;
-    wchar_t directory[32'768]{};
-    ensure_crash_directory(directory, std::size(directory));
+    auto* directory = crash_directory_buffer.data();
+    ensure_crash_directory(directory, crash_directory_buffer.size());
     SYSTEMTIME now{};
     GetLocalTime(&now);
     wchar_t stem[256]{};
@@ -67,9 +74,9 @@ void write_record(DWORD exception_code, EXCEPTION_POINTERS* pointers) noexcept {
         L"native-crash-%04u%02u%02u-%02u%02u%02u-%lu-%lu",
         now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
         GetCurrentProcessId(), GetCurrentThreadId());
-    wchar_t log_path[32'768]{};
-    _snwprintf_s(log_path, _TRUNCATE, L"%s\\%s.log", directory, stem);
-    HANDLE file = CreateFileW(log_path, GENERIC_WRITE, FILE_SHARE_READ,
+    _snwprintf_s(crash_log_path_buffer.data(), crash_log_path_buffer.size(), _TRUNCATE,
+        L"%s\\%s.log", directory, stem);
+    HANDLE file = CreateFileW(crash_log_path_buffer.data(), GENERIC_WRITE, FILE_SHARE_READ,
         nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
     if (file != INVALID_HANDLE_VALUE) {
         wchar_t phase_text[64]{};
@@ -93,9 +100,9 @@ void write_record(DWORD exception_code, EXCEPTION_POINTERS* pointers) noexcept {
         CloseHandle(file);
     }
 #if defined(SMK_DIAGNOSTICS)
-    wchar_t dump_path[32'768]{};
-    _snwprintf_s(dump_path, _TRUNCATE, L"%s\\%s.dmp", directory, stem);
-    HANDLE dump = CreateFileW(dump_path, GENERIC_WRITE, FILE_SHARE_READ,
+    _snwprintf_s(crash_dump_path_buffer.data(), crash_dump_path_buffer.size(), _TRUNCATE,
+        L"%s\\%s.dmp", directory, stem);
+    HANDLE dump = CreateFileW(crash_dump_path_buffer.data(), GENERIC_WRITE, FILE_SHARE_READ,
         nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
     if (dump != INVALID_HANDLE_VALUE) {
         MINIDUMP_EXCEPTION_INFORMATION information{};
