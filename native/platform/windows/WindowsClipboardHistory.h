@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/ClipboardHistory.h"
+#include "platform/windows/ImageClipboardPayload.h"
 
 #include <windows.h>
 
@@ -10,6 +11,18 @@
 #include <vector>
 
 namespace smk::windows {
+
+inline constexpr std::uint64_t kMaximumHistoryImageInputBytes =
+    ImageClipboardPayload::kMaxPixels * 4ULL + 1024ULL * 1024ULL;
+
+[[nodiscard]] inline bool history_image_stream_size_allowed(std::uint64_t size) noexcept {
+    return size > 0 && size <= kMaximumHistoryImageInputBytes;
+}
+
+[[nodiscard]] inline bool should_import_history_image(
+    const smk::core::ClipboardEntry& entry, bool capture_images, bool contains_bitmap) noexcept {
+    return capture_images && contains_bitmap && !entry.looks_like_spreadsheet;
+}
 
 class WindowsClipboardHistory final {
 public:

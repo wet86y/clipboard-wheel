@@ -8,6 +8,7 @@
 #include <winrt/base.h>
 
 #include <algorithm>
+#include <cwctype>
 
 namespace smk::windows {
 namespace {
@@ -22,6 +23,18 @@ std::wstring make_id() {
     std::wstring result(text);
     std::erase_if(result, [](wchar_t value) { return value == L'{' || value == L'}' || value == L'-'; });
     return result;
+}
+
+bool contains_table_html(std::wstring_view html) noexcept {
+    constexpr std::wstring_view token = L"<table";
+    for (std::size_t index = 0; index + token.size() <= html.size(); ++index) {
+        bool match = true;
+        for (std::size_t offset = 0; offset < token.size(); ++offset) {
+            if (std::towlower(html[index + offset]) != token[offset]) { match = false; break; }
+        }
+        if (match) return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -104,10 +117,16 @@ void WindowsClipboardHistory::load_on_worker(std::stop_token stop_token, std::si
             if (view.Contains(StandardDataFormats::Text())) entry.plain_text = view.GetTextAsync().get().c_str();
             if (view.Contains(StandardDataFormats::Html())) entry.html_text = view.GetHtmlFormatAsync().get().c_str();
             if (view.Contains(StandardDataFormats::Rtf())) entry.rtf_text = view.GetRtfAsync().get().c_str();
-            if (capture_images && view.Contains(StandardDataFormats::Bitmap())) {
+            entry.looks_like_spreadsheet = entry.plain_text.find(L'\t') != std::wstring::npos
+                || entry.plain_text.find(L'\n') != std::wstring::npos
+                || contains_table_html(entry.html_text);
+            entry.looks_like_single_cell = !entry.plain_text.empty()
+                && entry.plain_text.find_first_of(L"\t\r\n") == std::wstring::npos;
+            if (should_import_history_image(entry, capture_images,
+                    view.Contains(StandardDataFormats::Bitmap()))) {
                 const auto reference = view.GetBitmapAsync().get();
                 const auto stream = reference ? reference.OpenReadAsync().get() : nullptr;
-                if (stream && stream.Size() > 0 && stream.Size() <= ImageClipboardPayload::kMaxEncodedBytes) {
+                if (stream && history_image_stream_size_allowed(stream.Size())) {
                     const auto size = static_cast<std::uint32_t>(stream.Size());
                     winrt::Windows::Storage::Streams::DataReader reader(stream);
                     if (reader.LoadAsync(size).get() == size) {
@@ -124,10 +143,6 @@ void WindowsClipboardHistory::load_on_worker(std::stop_token stop_token, std::si
                     }
                 }
             }
-            entry.looks_like_spreadsheet = entry.plain_text.find(L'\t') != std::wstring::npos
-                || entry.plain_text.find(L'\n') != std::wstring::npos
-                || entry.html_text.find(L"<table") != std::wstring::npos;
-            entry.looks_like_single_cell = !entry.plain_text.empty() && entry.plain_text.find_first_of(L"\t\r\n") == std::wstring::npos;
             entry.display_text = entry.is_image_content
                 ? L"[图片]"
                 : entry.plain_text.substr(0, std::min<std::size_t>(entry.plain_text.size(), 80));

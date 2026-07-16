@@ -6,6 +6,7 @@
 #include "platform/windows/ShortcutDropTarget.h"
 #include "platform/windows/ShortcutIconResolver.h"
 #include "platform/windows/TrayIcon.h"
+#include "platform/windows/WindowsClipboardHistory.h"
 
 #include <windows.h>
 #include <ole2.h>
@@ -213,6 +214,20 @@ int main() {
     const auto preview = payload ? smk::windows::normalize_png_payload(payload->preview_png) : std::nullopt;
     expect(preview && preview->width == 360 && preview->height == 180, "preview is constrained to a 360 pixel edge");
     expect(!smk::windows::normalize_bgra_payload(8001, 8000, {}).has_value(), "64 million pixel overflow is rejected");
+    expect(smk::windows::history_image_stream_size_allowed(33ULL * 1024ULL * 1024ULL),
+        "Win+V accepts a raw 4K bitmap stream larger than the final PNG limit");
+    expect(!smk::windows::history_image_stream_size_allowed(
+        smk::windows::kMaximumHistoryImageInputBytes + 1),
+        "Win+V rejects image streams beyond the pixel-safe raw input budget");
+    smk::core::ClipboardEntry history_table;
+    history_table.looks_like_spreadsheet = true;
+    expect(!smk::windows::should_import_history_image(history_table, true, true),
+        "Win+V spreadsheet entries suppress their redundant bitmap representation");
+    smk::core::ClipboardEntry history_screenshot;
+    expect(smk::windows::should_import_history_image(history_screenshot, true, true),
+        "Win+V pure screenshots import when image capture is enabled");
+    expect(!smk::windows::should_import_history_image(history_screenshot, false, true),
+        "Win+V screenshots respect the image capture toggle");
 
     if (payload) {
         auto* browser_source = new BrowserImageDataObject(payload->png, L"JPG", true);
