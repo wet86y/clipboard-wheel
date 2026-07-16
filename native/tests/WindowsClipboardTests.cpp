@@ -18,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <utility>
@@ -35,6 +36,66 @@ bool offers(IDataObject* data, CLIPFORMAT format, DWORD medium) {
     FORMATETC request{format, nullptr, DVASPECT_CONTENT, -1, medium};
     return SUCCEEDED(data->QueryGetData(&request));
 }
+
+HGLOBAL copy_test_global(const void* bytes, std::size_t size) {
+    HGLOBAL global = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!global) return nullptr;
+    void* target = GlobalLock(global);
+    if (!target) { GlobalFree(global); return nullptr; }
+    std::memcpy(target, bytes, size);
+    GlobalUnlock(global);
+    return global;
+}
+
+class BrowserImageDataObject final : public IDataObject {
+public:
+    BrowserImageDataObject(std::vector<std::uint8_t> image, const wchar_t* image_format, bool unicode)
+        : image_(std::move(image)), image_format_(static_cast<CLIPFORMAT>(RegisterClipboardFormatW(image_format))),
+          unicode_(unicode), html_(static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"HTML Format"))) {}
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** object) override {
+        if (!object) return E_POINTER; *object = nullptr;
+        if (id == IID_IUnknown || id == IID_IDataObject) { *object = this; AddRef(); return S_OK; }
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
+    ULONG STDMETHODCALLTYPE Release() override { const ULONG value = --references_; if (!value) delete this; return value; }
+    HRESULT STDMETHODCALLTYPE GetData(FORMATETC* format, STGMEDIUM* medium) override {
+        if (!format || !medium || FAILED(QueryGetData(format))) return DV_E_FORMATETC;
+        std::memset(medium, 0, sizeof(*medium)); medium->tymed = TYMED_HGLOBAL;
+        if (format->cfFormat == image_format_) {
+            medium->hGlobal = copy_test_global(image_.data(), image_.size());
+        } else if (format->cfFormat == CF_UNICODETEXT) {
+            constexpr wchar_t text[] = L"https://example.test/browser-image";
+            medium->hGlobal = copy_test_global(text, sizeof(text));
+        } else if (format->cfFormat == CF_TEXT) {
+            constexpr char text[] = "legacy browser image";
+            medium->hGlobal = copy_test_global(text, sizeof(text));
+        } else {
+            constexpr char html[] = "<img src=\"https://example.test/browser-image\">";
+            medium->hGlobal = copy_test_global(html, sizeof(html));
+        }
+        return medium->hGlobal ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC* format) override {
+        if (!format || !(format->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
+        if (format->cfFormat == image_format_ || format->cfFormat == html_
+            || format->cfFormat == (unicode_ ? CF_UNICODETEXT : CF_TEXT)) return S_OK;
+        return DV_E_FORMATETC;
+    }
+    HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(FORMATETC*, FORMATETC* output) override { if (output) output->ptd = nullptr; return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD, IEnumFORMATETC**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+    HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+    HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
+private:
+    std::atomic<ULONG> references_{1};
+    std::vector<std::uint8_t> image_;
+    CLIPFORMAT image_format_{};
+    bool unicode_ = true;
+    CLIPFORMAT html_{};
+};
 
 class ShortcutDropDataObject final : public IDataObject {
 public:
@@ -153,11 +214,32 @@ int main() {
     expect(preview && preview->width == 360 && preview->height == 180, "preview is constrained to a 360 pixel edge");
     expect(!smk::windows::normalize_bgra_payload(8001, 8000, {}).has_value(), "64 million pixel overflow is rejected");
 
+    if (payload) {
+        auto* browser_source = new BrowserImageDataObject(payload->png, L"JPG", true);
+        const auto browser_entry = smk::windows::ClipboardService::create_entry_from_data_object(browser_source, true);
+        browser_source->Release();
+        expect(browser_entry && browser_entry->is_image_content && browser_entry->has_image()
+            && !browser_entry->plain_text.empty() && !browser_entry->html_text.empty(),
+            "browser JPG plus text and HTML is captured and classified as an image");
+
+        auto* legacy_source = new BrowserImageDataObject(payload->png, L"GIF", false);
+        const auto legacy_entry = smk::windows::ClipboardService::create_entry_from_data_object(legacy_source, true);
+        legacy_source->Release();
+        expect(legacy_entry && legacy_entry->plain_text == L"legacy browser image" && legacy_entry->is_image_content,
+            "CF_TEXT fallback and GIF alias are captured together");
+
+        auto* disabled_source = new BrowserImageDataObject(payload->png, L"JPG", true);
+        const auto disabled_entry = smk::windows::ClipboardService::create_entry_from_data_object(disabled_source, false);
+        disabled_source->Release();
+        expect(disabled_entry && !disabled_entry->has_image() && !disabled_entry->is_image_content,
+            "image capture toggle suppresses browser image bytes while retaining text fallbacks");
+    }
+
     auto data = payload ? smk::windows::create_image_data_object(*payload) : nullptr;
     expect(data != nullptr, "image data object is created");
     if (data) {
-        expect(offers(data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"PNG")), TYMED_HGLOBAL | TYMED_ISTREAM), "PNG is advertised");
-        expect(offers(data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"image/png")), TYMED_HGLOBAL | TYMED_ISTREAM), "image/png is advertised");
+        expect(!offers(data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"PNG")), TYMED_HGLOBAL | TYMED_ISTREAM), "custom PNG is not advertised to Office targets");
+        expect(!offers(data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"image/png")), TYMED_HGLOBAL | TYMED_ISTREAM), "custom image/png is not advertised to Office targets");
         expect(offers(data.Get(), static_cast<CLIPFORMAT>(CF_DIBV5), TYMED_HGLOBAL), "DIBV5 is advertised");
         expect(offers(data.Get(), static_cast<CLIPFORMAT>(CF_DIB), TYMED_HGLOBAL), "DIB is advertised");
         expect(offers(data.Get(), static_cast<CLIPFORMAT>(CF_BITMAP), TYMED_GDI), "BITMAP is advertised");
@@ -171,6 +253,50 @@ int main() {
             if (SUCCEEDED(result)) ReleaseStgMedium(&medium);
         }
     }
+
+    smk::core::ClipboardEntry mixed_image;
+    mixed_image.id = L"browser-image";
+    mixed_image.plain_text = L"https://example.test/image.png";
+    mixed_image.html_text = L"<img src=\"https://example.test/image.png\">";
+    if (payload) mixed_image.image_png_bytes = payload->png;
+    expect(smk::windows::should_capture_as_image(mixed_image),
+        "browser image payload remains an image when text and HTML fallbacks are present");
+    mixed_image.is_image_content = smk::windows::should_capture_as_image(mixed_image);
+    auto mixed_data = smk::windows::create_clipboard_data_object(
+        mixed_image, smk::core::PasteMode::formatted);
+    expect(mixed_data && offers(mixed_data.Get(), static_cast<CLIPFORMAT>(CF_DIBV5), TYMED_HGLOBAL)
+        && !offers(mixed_data.Get(), static_cast<CLIPFORMAT>(CF_UNICODETEXT), TYMED_HGLOBAL),
+        "browser mixed payload is written through the image path, not the fallback text path");
+    mixed_image.looks_like_spreadsheet = true;
+    expect(!smk::windows::should_capture_as_image(mixed_image),
+        "spreadsheet payloads still suppress accidental image capture");
+
+    smk::core::ClipboardEntry rich_text;
+    rich_text.id = L"rich";
+    rich_text.plain_text = L"中文 text";
+    rich_text.html_text = L"<b>中文 text</b>";
+    rich_text.rtf_text = L"{\\rtf1 text}";
+    rich_text.csv_text = L"a,b";
+    auto text_data = smk::windows::create_clipboard_data_object(
+        rich_text, smk::core::PasteMode::formatted);
+    expect(text_data && offers(text_data.Get(), CF_UNICODETEXT, TYMED_HGLOBAL),
+        "text data object advertises Unicode text");
+    expect(text_data && offers(text_data.Get(), CF_TEXT, TYMED_HGLOBAL),
+        "text data object advertises the managed CF_TEXT compatibility fallback");
+    expect(text_data && offers(text_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"HTML Format")), TYMED_HGLOBAL)
+        && offers(text_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Rich Text Format")), TYMED_HGLOBAL)
+        && offers(text_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Csv")), TYMED_HGLOBAL),
+        "formatted data object advertises HTML, RTF, and CSV together");
+
+    smk::windows::ClipboardCaptureRetryState capture_retry;
+    const auto first_generation = capture_retry.begin();
+    for (unsigned attempt = 2; attempt <= smk::windows::ClipboardCaptureRetryState::kMaximumAttempts; ++attempt) {
+        expect(capture_retry.advance(first_generation), "clipboard busy retry advances within the six-attempt budget");
+    }
+    expect(!capture_retry.advance(first_generation), "clipboard busy retry stops after six attempts");
+    const auto second_generation = capture_retry.begin();
+    expect(second_generation != first_generation && !capture_retry.advance(first_generation),
+        "a new clipboard update invalidates stale capture retries");
 
     smk::windows::MouseButtonSuppression buttons;
     auto decision = buttons.handle(WM_LBUTTONUP, true);
@@ -306,13 +432,13 @@ int main() {
 
     smk::windows::ClipboardUpdateCoalescer clipboard_updates;
     clipboard_updates.note_update(1000);
-    expect(!clipboard_updates.consume_if_ready(1119),
-        "clipboard updates wait for the full screenshot stabilization window");
-    clipboard_updates.note_update(1080);
-    expect(!clipboard_updates.consume_if_ready(1199) && clipboard_updates.remaining_ms(1199) == 1,
-        "a second screenshot format update restarts the clipboard quiet window");
-    expect(clipboard_updates.consume_if_ready(1200) && !clipboard_updates.pending(),
-        "a burst of clipboard updates produces one capture after the final quiet period");
+    expect(!clipboard_updates.consume_if_ready(1039),
+        "clipboard updates use the managed forty millisecond coalescing window");
+    clipboard_updates.note_update(1020);
+    expect(!clipboard_updates.consume_if_ready(1059) && clipboard_updates.remaining_ms(1059) == 1,
+        "a second format update restarts the forty millisecond quiet window");
+    expect(clipboard_updates.consume_if_ready(1060) && !clipboard_updates.pending(),
+        "a burst of clipboard updates produces one capture after the final managed quiet period");
 
     const auto hotkey = smk::windows::parse_extended_hotkey(L"Ctrl+Shift+F12");
     expect(hotkey.size() == 3 && hotkey[0] == VK_CONTROL && hotkey[2] == VK_F12,

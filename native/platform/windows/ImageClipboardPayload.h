@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/ClipboardEntry.h"
+#include "core/PastePolicy.h"
+
 #include <windows.h>
 #include <objidl.h>
 #include <wrl/client.h>
@@ -30,5 +33,7 @@ struct ImageClipboardPayload {
 [[nodiscard]] std::optional<ImageClipboardPayload> normalize_bgra_payload(
     UINT width, UINT height, const std::vector<std::uint8_t>& pixels);
 [[nodiscard]] Microsoft::WRL::ComPtr<IDataObject> create_image_data_object(const ImageClipboardPayload& payload);
+[[nodiscard]] Microsoft::WRL::ComPtr<IDataObject> create_clipboard_data_object(
+    const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode);
 
 } // namespace smk::windows

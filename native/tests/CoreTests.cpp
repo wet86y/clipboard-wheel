@@ -229,6 +229,29 @@ void paste_tests() {
     table.html_text = L"<table></table>";
     expect(smk::core::resolve_paste_mode(table, smk::core::PasteMode::smart) == smk::core::PasteMode::formatted,
         "formatted spreadsheet uses formatted paste");
+    auto html = entry(L"html", L"rich text");
+    html.html_text = L"<b>rich text</b>";
+    expect(smk::core::resolve_paste_mode(html, smk::core::PasteMode::smart) == smk::core::PasteMode::formatted,
+        "non-spreadsheet HTML uses formatted paste like the managed app");
+    auto rtf = entry(L"rtf", L"rich text");
+    rtf.rtf_text = L"{\\rtf1 rich text}";
+    expect(smk::core::resolve_paste_mode(rtf, smk::core::PasteMode::smart) == smk::core::PasteMode::formatted,
+        "RTF-only content uses formatted paste like the managed app");
+    auto merged = entry(L"merged", L"value");
+    merged.looks_like_single_cell = true;
+    merged.html_text = L"<TaBlE><tr><td>value</td></tr></TaBlE>";
+    expect(smk::core::resolve_paste_mode(merged, smk::core::PasteMode::smart) == smk::core::PasteMode::formatted,
+        "single-cell text with case-insensitive table HTML preserves formatting");
+    auto image = entry(L"image", L"browser fallback text");
+    image.is_image_content = true;
+    expect(smk::core::resolve_paste_mode(image, smk::core::PasteMode::smart) == smk::core::PasteMode::formatted,
+        "image content always uses the image/formatted path");
+    expect(smk::core::can_skip_clipboard_write(single, smk::core::PasteMode::plain_text, L"value"),
+        "matching plain Unicode text skips the redundant clipboard rewrite");
+    expect(!smk::core::can_skip_clipboard_write(html, smk::core::PasteMode::formatted, L"rich text"),
+        "matching text cannot skip a required HTML clipboard payload");
+    expect(!smk::core::can_skip_clipboard_write(image, smk::core::PasteMode::formatted, image.plain_text),
+        "matching fallback text cannot skip an image clipboard payload");
 }
 
 } // namespace

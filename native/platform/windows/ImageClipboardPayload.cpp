@@ -13,6 +13,7 @@
 namespace smk::windows {
 namespace {
 using Microsoft::WRL::ComPtr;
+constexpr DWORD kBiAlphaBitfields = 6;
 
 ComPtr<IWICImagingFactory> wic_factory() {
     ComPtr<IWICImagingFactory> factory;
@@ -46,17 +47,28 @@ bool valid_dimensions(UINT width, UINT height) {
 
 std::vector<std::uint8_t> stream_bytes(IStream* stream) {
     if (!stream) return {};
-    STATSTG stat{}; if (FAILED(stream->Stat(&stat, STATFLAG_NONAME)) || stat.cbSize.QuadPart <= 0
-        || stat.cbSize.QuadPart > static_cast<LONGLONG>(ImageClipboardPayload::kMaxEncodedBytes)) return {};
-    LARGE_INTEGER zero{}; stream->Seek(zero, STREAM_SEEK_SET, nullptr);
-    std::vector<std::uint8_t> result(static_cast<std::size_t>(stat.cbSize.QuadPart)); ULONG read = 0;
-    if (FAILED(stream->Read(result.data(), static_cast<ULONG>(result.size()), &read)) || read != result.size()) return {};
+    LARGE_INTEGER zero{}; (void)stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+    std::vector<std::uint8_t> result;
+    STATSTG stat{};
+    if (SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME)) && stat.cbSize.QuadPart > 0) {
+        if (stat.cbSize.QuadPart > static_cast<LONGLONG>(ImageClipboardPayload::kMaxEncodedBytes)) return {};
+        result.reserve(static_cast<std::size_t>(stat.cbSize.QuadPart));
+    }
+    std::array<std::uint8_t, 64U * 1024U> buffer{};
+    for (;;) {
+        ULONG read = 0;
+        const HRESULT status = stream->Read(buffer.data(), static_cast<ULONG>(buffer.size()), &read);
+        if (FAILED(status) || result.size() + read > ImageClipboardPayload::kMaxEncodedBytes) return {};
+        result.insert(result.end(), buffer.begin(), buffer.begin() + read);
+        if (status == S_FALSE || read == 0) break;
+    }
     return result;
 }
 
-std::vector<std::uint8_t> global_bytes(HGLOBAL global) {
+std::vector<std::uint8_t> global_bytes(HGLOBAL global,
+    std::size_t maximum = ImageClipboardPayload::kMaxEncodedBytes) {
     const SIZE_T size = global ? GlobalSize(global) : 0;
-    if (!size || size > ImageClipboardPayload::kMaxEncodedBytes) return {};
+    if (!size || size > maximum) return {};
     const auto* memory = static_cast<const std::uint8_t*>(GlobalLock(global));
     if (!memory) return {}; std::vector<std::uint8_t> result(memory, memory + size); GlobalUnlock(global); return result;
 }
@@ -94,22 +106,45 @@ bool decode_bitmap(HBITMAP bitmap, UINT& width, UINT& height, std::vector<std::u
 }
 
 bool decode_dib(const std::vector<std::uint8_t>& dib, UINT& width, UINT& height, std::vector<std::uint8_t>& pixels) {
-    if (dib.size() < sizeof(BITMAPINFOHEADER)) return false;
+    if (dib.size() < sizeof(BITMAPCOREHEADER)) return false;
     const auto* header = reinterpret_cast<const BITMAPINFOHEADER*>(dib.data());
-    if (header->biSize < sizeof(BITMAPINFOHEADER) || header->biSize > dib.size() || header->biWidth <= 0 || header->biHeight == 0) return false;
-    width = static_cast<UINT>(header->biWidth); height = static_cast<UINT>(std::abs(header->biHeight));
+    const DWORD header_size = header->biSize;
+    WORD bit_count = 0;
+    DWORD compression = BI_RGB;
+    LONG signed_height = 0;
+    std::size_t colors = 0;
+    std::size_t color_entry_size = sizeof(RGBQUAD);
+    if (header_size == sizeof(BITMAPCOREHEADER)) {
+        const auto* core = reinterpret_cast<const BITMAPCOREHEADER*>(dib.data());
+        if (!core->bcWidth || !core->bcHeight || core->bcPlanes != 1) return false;
+        width = core->bcWidth; signed_height = core->bcHeight; bit_count = core->bcBitCount;
+        if (bit_count <= 8) colors = 1ULL << bit_count;
+        color_entry_size = sizeof(RGBTRIPLE);
+    } else {
+        if (header_size < sizeof(BITMAPINFOHEADER) || header_size > dib.size()
+            || header->biWidth <= 0 || header->biHeight == 0 || header->biPlanes != 1) return false;
+        width = static_cast<UINT>(header->biWidth); signed_height = header->biHeight;
+        bit_count = header->biBitCount; compression = header->biCompression;
+        colors = header->biClrUsed;
+        if (!colors && bit_count <= 8) colors = 1ULL << bit_count;
+    }
+    height = static_cast<UINT>(std::abs(signed_height));
     if (!valid_dimensions(width, height)) return false;
-    std::size_t colors = header->biClrUsed;
-    if (!colors && header->biBitCount <= 8) colors = 1ULL << header->biBitCount;
-    std::size_t offset = header->biSize + colors * sizeof(RGBQUAD);
-    if (header->biCompression == BI_BITFIELDS && header->biSize == sizeof(BITMAPINFOHEADER)) offset += 3 * sizeof(DWORD);
+    if (colors > (dib.size() - header_size) / color_entry_size) return false;
+    std::size_t offset = header_size + colors * color_entry_size;
+    if ((compression == BI_BITFIELDS || compression == kBiAlphaBitfields)
+        && header_size == sizeof(BITMAPINFOHEADER)) {
+        const std::size_t mask_count = compression == kBiAlphaBitfields ? 4 : 3;
+        if (offset > dib.size() - mask_count * sizeof(DWORD)) return false;
+        offset += mask_count * sizeof(DWORD);
+    }
     if (offset >= dib.size()) return false;
-    if (header->biBitCount == 32 && (header->biCompression == BI_RGB || header->biCompression == BI_BITFIELDS)) {
+    if (bit_count == 32 && (compression == BI_RGB || compression == BI_BITFIELDS || compression == kBiAlphaBitfields)) {
         const std::size_t stride = static_cast<std::size_t>(width) * 4;
         if (offset + stride * height > dib.size()) return false;
         pixels.resize(stride * height);
         for (UINT row = 0; row < height; ++row) {
-            const UINT source_row = header->biHeight < 0 ? row : height - row - 1;
+            const UINT source_row = signed_height < 0 ? row : height - row - 1;
             std::memcpy(pixels.data() + static_cast<std::size_t>(row) * stride,
                 dib.data() + offset + static_cast<std::size_t>(source_row) * stride, stride);
         }
@@ -229,12 +264,8 @@ private:
 class ImageDataObject final : public IDataObject {
 public:
     explicit ImageDataObject(ImageClipboardPayload payload) : payload_(std::move(payload)) {
-        png_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"PNG"));
-        image_png_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"image/png"));
         history_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"CanIncludeInClipboardHistory"));
-        formats_ = {{png_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL | TYMED_ISTREAM},
-            {image_png_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL | TYMED_ISTREAM},
-            {CF_DIBV5, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL}, {CF_DIB, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL},
+        formats_ = {{CF_DIBV5, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL}, {CF_DIB, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL},
             {CF_BITMAP, nullptr, DVASPECT_CONTENT, -1, TYMED_GDI}, {history_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL}};
     }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override {
@@ -246,12 +277,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetData(FORMATETC* request, STGMEDIUM* medium) override {
         if (!request || !medium) return E_POINTER; std::memset(medium, 0, sizeof(*medium));
         if (FAILED(QueryGetData(request))) return DV_E_FORMATETC;
-        if (request->cfFormat == png_ || request->cfFormat == image_png_) {
-            if ((request->tymed & TYMED_ISTREAM) && !(request->tymed & TYMED_HGLOBAL)) {
-                medium->tymed = TYMED_ISTREAM; return CreateStreamOnHGlobal(copy_global(payload_.png.data(), payload_.png.size()), TRUE, &medium->pstm);
-            }
-            medium->tymed = TYMED_HGLOBAL; medium->hGlobal = copy_global(payload_.png.data(), payload_.png.size());
-        } else if (request->cfFormat == CF_DIBV5 || request->cfFormat == CF_DIB) {
+        if (request->cfFormat == CF_DIBV5 || request->cfFormat == CF_DIB) {
             const auto bytes = make_dib(payload_, request->cfFormat == CF_DIBV5); medium->tymed = TYMED_HGLOBAL;
             medium->hGlobal = copy_global(bytes.data(), bytes.size());
         } else if (request->cfFormat == CF_BITMAP) { medium->tymed = TYMED_GDI; medium->hBitmap = make_bitmap(payload_); }
@@ -273,7 +299,85 @@ public:
     HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
     HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
 private:
-    std::atomic<ULONG> references_{1}; ImageClipboardPayload payload_; CLIPFORMAT png_{}, image_png_{}, history_{};
+    std::atomic<ULONG> references_{1}; ImageClipboardPayload payload_; CLIPFORMAT history_{};
+    std::vector<FORMATETC> formats_;
+};
+
+HGLOBAL make_encoded_text(const std::wstring& text, UINT code_page) {
+    const int count = WideCharToMultiByte(code_page, 0, text.data(), static_cast<int>(text.size()),
+        nullptr, 0, nullptr, nullptr);
+    if (count < 0) return nullptr;
+    std::vector<char> bytes(static_cast<std::size_t>(count) + 1, '\0');
+    if (count > 0) WideCharToMultiByte(code_page, 0, text.data(), static_cast<int>(text.size()),
+        bytes.data(), count, nullptr, nullptr);
+    return copy_global(bytes.data(), bytes.size());
+}
+
+class TextDataObject final : public IDataObject {
+public:
+    TextDataObject(smk::core::ClipboardEntry entry, smk::core::PasteMode mode)
+        : entry_(std::move(entry)), mode_(mode) {
+        html_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"HTML Format"));
+        rtf_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Rich Text Format"));
+        csv_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Csv"));
+        history_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"CanIncludeInClipboardHistory"));
+        formats_ = {{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL},
+            {CF_TEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL}};
+        if (mode_ == smk::core::PasteMode::formatted) {
+            if (!entry_.html_text.empty()) formats_.push_back({html_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL});
+            if (!entry_.rtf_text.empty()) formats_.push_back({rtf_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL});
+            if (!entry_.csv_text.empty()) formats_.push_back({csv_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL});
+        }
+        formats_.push_back({history_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL});
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override {
+        if (!value) return E_POINTER; *value = nullptr;
+        if (iid == IID_IUnknown || iid == IID_IDataObject) { *value = this; AddRef(); return S_OK; }
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
+    ULONG STDMETHODCALLTYPE Release() override { const ULONG value = --references_; if (!value) delete this; return value; }
+    HRESULT STDMETHODCALLTYPE GetData(FORMATETC* request, STGMEDIUM* medium) override {
+        if (!request || !medium) return E_POINTER; std::memset(medium, 0, sizeof(*medium));
+        if (FAILED(QueryGetData(request))) return DV_E_FORMATETC;
+        medium->tymed = TYMED_HGLOBAL;
+        const auto& text = entry_.plain_text.empty() ? entry_.display_text : entry_.plain_text;
+        if (request->cfFormat == CF_UNICODETEXT) {
+            medium->hGlobal = copy_global(text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+        } else if (request->cfFormat == CF_TEXT) {
+            medium->hGlobal = make_encoded_text(text, CP_ACP);
+        } else if (request->cfFormat == html_) {
+            medium->hGlobal = make_encoded_text(entry_.html_text, CP_UTF8);
+        } else if (request->cfFormat == rtf_) {
+            medium->hGlobal = make_encoded_text(entry_.rtf_text, CP_UTF8);
+        } else if (request->cfFormat == csv_) {
+            medium->hGlobal = make_encoded_text(entry_.csv_text, CP_UTF8);
+        } else {
+            const BOOL include = FALSE;
+            medium->hGlobal = copy_global(&include, sizeof(include));
+        }
+        return medium->hGlobal ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE GetDataHere(FORMATETC*, STGMEDIUM*) override { return DATA_E_FORMATETC; }
+    HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC* request) override {
+        if (!request || request->dwAspect != DVASPECT_CONTENT) return DV_E_DVASPECT;
+        for (const auto& format : formats_) if (format.cfFormat == request->cfFormat && (format.tymed & request->tymed)) return S_OK;
+        return DV_E_FORMATETC;
+    }
+    HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(FORMATETC*, FORMATETC* output) override { if (output) output->ptd = nullptr; return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD direction, IEnumFORMATETC** result) override {
+        if (!result) return E_POINTER; if (direction != DATADIR_GET) return E_NOTIMPL;
+        *result = new FormatEnumerator(formats_); return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+    HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+    HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
+private:
+    std::atomic<ULONG> references_{1};
+    smk::core::ClipboardEntry entry_;
+    smk::core::PasteMode mode_;
+    CLIPFORMAT html_{}, rtf_{}, csv_{}, history_{};
     std::vector<FORMATETC> formats_;
 };
 }
@@ -290,7 +394,8 @@ std::optional<ImageClipboardPayload> normalize_bgra_payload(
 
 std::optional<ImageClipboardPayload> read_image_payload(IDataObject* data) {
     if (!data) return std::nullopt;
-    const std::array<const wchar_t*, 6> encoded_names{L"PNG", L"image/png", L"JFIF", L"image/jpeg", L"JPEG", L"image/bmp"};
+    const std::array<const wchar_t*, 12> encoded_names{L"PNG", L"image/png", L"JFIF", L"JPEG", L"JPG",
+        L"image/jpeg", L"image/jpg", L"GIF", L"image/gif", L"BMP", L"image/bmp", L"Bitmap"};
     for (const auto* name : encoded_names) {
         FORMATETC format{static_cast<CLIPFORMAT>(RegisterClipboardFormatW(name)), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL | TYMED_ISTREAM};
         STGMEDIUM medium{}; if (SUCCEEDED(data->GetData(&format, &medium))) {
@@ -301,7 +406,8 @@ std::optional<ImageClipboardPayload> read_image_payload(IDataObject* data) {
     for (const CLIPFORMAT format_id : std::array<CLIPFORMAT, 2>{static_cast<CLIPFORMAT>(CF_DIBV5), static_cast<CLIPFORMAT>(CF_DIB)}) {
         FORMATETC format{format_id, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL}; STGMEDIUM medium{};
         if (SUCCEEDED(data->GetData(&format, &medium))) {
-            const auto bytes = global_bytes(medium.hGlobal); ReleaseStgMedium(&medium); UINT width = 0, height = 0; std::vector<std::uint8_t> pixels;
+            constexpr std::size_t kMaximumDibBytes = static_cast<std::size_t>(ImageClipboardPayload::kMaxPixels) * 4U + 4096U;
+            const auto bytes = global_bytes(medium.hGlobal, kMaximumDibBytes); ReleaseStgMedium(&medium); UINT width = 0, height = 0; std::vector<std::uint8_t> pixels;
             if (decode_dib(bytes, width, height, pixels)) return make_payload(width, height, std::move(pixels));
         }
     }
@@ -315,6 +421,17 @@ std::optional<ImageClipboardPayload> read_image_payload(IDataObject* data) {
 
 ComPtr<IDataObject> create_image_data_object(const ImageClipboardPayload& payload) {
     ComPtr<IDataObject> result; if (payload.valid()) result.Attach(new ImageDataObject(payload)); return result;
+}
+
+ComPtr<IDataObject> create_clipboard_data_object(
+    const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode) {
+    if (entry.is_image_content && entry.has_image()) {
+        const auto payload = normalize_png_payload(entry.image_png_bytes);
+        return payload ? create_image_data_object(*payload) : ComPtr<IDataObject>{};
+    }
+    ComPtr<IDataObject> result;
+    result.Attach(new TextDataObject(entry, mode));
+    return result;
 }
 
 } // namespace smk::windows

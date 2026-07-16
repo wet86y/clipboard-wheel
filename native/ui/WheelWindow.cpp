@@ -558,7 +558,7 @@ void WheelWindow::rebuild_image_cache() {
     image_cache_.assign(slots_.size(), {});
     if (!render_target_ || !wic_factory_) return;
     for (std::size_t index = 0; index < slots_.size(); ++index) {
-        if (!slots_[index].entry || !slots_[index].entry->has_image()) continue;
+        if (!slots_[index].entry || !slots_[index].entry->is_image_content) continue;
         auto& entry = *slots_[index].entry;
         auto& png = entry.preview_image_png_bytes.empty() ? entry.image_png_bytes : entry.preview_image_png_bytes;
         Microsoft::WRL::ComPtr<IWICStream> stream;
@@ -669,7 +669,7 @@ void WheelWindow::rebuild_visual_cache() {
             const double cell_height = rectangle.bottom - rectangle.top;
             const double text_width = std::max(44.0 * dpi, cell_width - 44.0 * dpi);
             const double text_height = std::max(32.0 * dpi, cell_height - 48.0 * dpi);
-            if (entry.has_image() && index < image_cache_.size() && image_cache_[index]) {
+            if (entry.is_image_content && index < image_cache_.size() && image_cache_[index]) {
                 const float inset = kImageClipInset * dpi;
                 D2D1_RECT_F inset_bounds{bounds.left + inset, bounds.top + inset,
                     bounds.right - inset, bounds.bottom - inset};
@@ -730,7 +730,7 @@ void WheelWindow::rebuild_visual_cache() {
             auto line_slots = build_sector_text_slots(cache.geometry.Get(), center,
                 metrics.inner_radius + inner_margin, metrics.outer_radius - outer_margin,
                 start, end, edge_margin, line_height, entry.is_quick_copy ? 1.10 : 1.0);
-            if (entry.has_image() && index < image_cache_.size() && image_cache_[index] && !line_slots.empty()) {
+            if (entry.is_image_content && index < image_cache_.size() && image_cache_[index] && !line_slots.empty()) {
                 cache.image_clip = create_parallel_inset_sector_geometry(center,
                     static_cast<float>(metrics.inner_radius + kImageClipInset * dpi),
                     static_cast<float>(metrics.outer_radius - kImageClipInset * dpi),
