@@ -33,7 +33,7 @@ public:
     using ExitCallback = std::function<void()>;
 
     NativeUpdateCoordinator(HINSTANCE instance, std::filesystem::path executable,
-        std::string repository, desktop_update_kit::Version current_version,
+        desktop_update_kit::ClientOptions client_options,
         bool acceleration, bool ui_enabled, ExitCallback exit_callback);
     ~NativeUpdateCoordinator() override;
 

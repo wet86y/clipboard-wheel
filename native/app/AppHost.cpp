@@ -125,8 +125,16 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
     if (const auto test_repository = argument_value(arguments, L"--update-test-repository"))
         update_repository = utf8(*test_repository);
 #endif
+    desktop_update_kit::ClientOptions update_options{
+        update_repository == "wet86y/clipboard-wheel"
+            ? L"clipboard-wheel"
+            : L"clipboard-wheel-update-integration",
+        std::move(update_repository),
+        "super-middle-key.exe",
+        "super-middle-key.exe.sha256",
+        desktop_update_kit::Version{kVersionMajor, kVersionMinor, kVersionPatch}};
     updater_ = std::make_unique<smk::updater::NativeUpdateCoordinator>(instance, executable_path(),
-        update_repository, desktop_update_kit::Version{kVersionMajor, kVersionMinor, kVersionPatch},
+        std::move(update_options),
         settings_.update.use_acceleration_nodes,
         smk::updater::production_update_ui_enabled,
         [] { PostQuitMessage(0); });

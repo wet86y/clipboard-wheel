@@ -74,13 +74,11 @@ ExecutableNameNormalizationResult normalize_executable_name(
 }
 
 NativeUpdateCoordinator::NativeUpdateCoordinator(HINSTANCE instance, std::filesystem::path executable,
-    std::string repository, desktop_update_kit::Version current_version, bool acceleration,
+    desktop_update_kit::ClientOptions client_options, bool acceleration,
     bool ui_enabled, ExitCallback exit_callback)
     : instance_(instance), executable_(std::move(executable)), ui_enabled_(ui_enabled),
       exit_callback_(std::move(exit_callback)),
-      client_(desktop_update_kit::ClientOptions{
-          ui_enabled && repository != "wet86y/clipboard-wheel" ? L"clipboard-wheel-update-integration" : L"clipboard-wheel",
-          std::move(repository), "super-middle-key.exe", "super-middle-key.exe.sha256", current_version}),
+      client_(std::move(client_options)),
       session_(client_) {
     state_.state = ui_enabled_ ? UpdateState::idle : UpdateState::disabled;
     state_.acceleration = acceleration;
