@@ -14,6 +14,7 @@ public:
     SingleInstance& operator=(const SingleInstance&) = delete;
 
     bool acquire(const wchar_t* name = L"Local\\SuperMiddleKey.SingleInstance", bool wait_for_takeover = false);
+    void release() noexcept;
     [[nodiscard]] bool owns_mutex() const noexcept { return handle_ != nullptr; }
 
 private:

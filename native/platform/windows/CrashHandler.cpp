@@ -19,6 +19,7 @@ std::atomic_bool hook_available{false};
 std::atomic_bool capture_ready{false};
 std::atomic_uint32_t input_generation{0};
 std::atomic_flag writing = ATOMIC_FLAG_INIT;
+std::mutex hang_dump_mutex;
 LPTOP_LEVEL_EXCEPTION_FILTER previous_filter = nullptr;
 std::terminate_handler previous_terminate = nullptr;
 std::array<wchar_t, 32'768> crash_directory_buffer{};
@@ -167,6 +168,56 @@ void crash_set_input_state(bool hook, bool ready, std::uint32_t generation) noex
 
 void crash_write_emergency(DWORD exception_code) noexcept {
     write_record(exception_code, nullptr);
+}
+
+bool crash_write_hang_dump(HANDLE process, DWORD process_id,
+    DWORD main_thread_id, std::wstring_view reason) noexcept {
+    if (!process || !process_id) return false;
+    try {
+        std::scoped_lock lock(hang_dump_mutex);
+        std::array<wchar_t, 32'768> directory{};
+        ensure_crash_directory(directory.data(), directory.size());
+        if (!directory[0]) return false;
+
+        SYSTEMTIME now{};
+        GetLocalTime(&now);
+        const auto stem = std::format(
+            L"native-hang-shell-{:04}{:02}{:02}-{:02}{:02}{:02}-{}-{}",
+            now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
+            process_id, main_thread_id);
+        const auto log_path = std::filesystem::path(directory.data()) / (stem + L".log");
+        const auto dump_path = std::filesystem::path(directory.data()) / (stem + L".dmp");
+
+        HANDLE log = CreateFileW(log_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+        if (log != INVALID_HANDLE_VALUE) {
+            const auto record = std::format(
+                L"kind=shell_hang\r\npid={}\r\nmain_tid={}\r\nreason={}\r\n",
+                process_id, main_thread_id, reason);
+            const int byte_count = WideCharToMultiByte(CP_UTF8, 0, record.data(),
+                static_cast<int>(record.size()), nullptr, 0, nullptr, nullptr);
+            std::string utf8(static_cast<std::size_t>(std::max(0, byte_count)), '\0');
+            if (byte_count > 0) WideCharToMultiByte(CP_UTF8, 0, record.data(),
+                static_cast<int>(record.size()), utf8.data(), byte_count, nullptr, nullptr);
+            DWORD written = 0;
+            if (!utf8.empty()) WriteFile(log, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+            FlushFileBuffers(log);
+            CloseHandle(log);
+        }
+
+        HANDLE dump = CreateFileW(dump_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+        if (dump == INVALID_HANDLE_VALUE) return false;
+        const BOOL written = MiniDumpWriteDump(process, process_id, dump,
+            static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules),
+            nullptr, nullptr, nullptr);
+        FlushFileBuffers(dump);
+        CloseHandle(dump);
+        rotate_dumps();
+        return written != FALSE;
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace smk::windows

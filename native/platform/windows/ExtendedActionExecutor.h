@@ -36,6 +36,11 @@ using ExtendedKeyEventSender = std::function<bool(WORD key, bool key_up)>;
     const std::vector<WORD>& keys,
     const ExtendedKeyEventSender& sender);
 [[nodiscard]] bool send_extended_hotkey(const std::vector<WORD>& keys);
+[[nodiscard]] int run_shell_open_helper(const std::wstring& target);
+#if defined(SMK_DIAGNOSTICS)
+[[nodiscard]] int run_shell_hang_helper_test();
+[[nodiscard]] int run_shell_timeout_self_test();
+#endif
 
 class ExtendedActionExecutor final {
 public:

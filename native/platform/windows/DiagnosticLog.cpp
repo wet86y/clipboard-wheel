@@ -16,7 +16,7 @@ namespace smk::windows {
 namespace {
 constexpr std::size_t kMaximumQueuedLines = 4096;
 constexpr std::uint64_t kMaximumFileBytes = 2ULL * 1024ULL * 1024ULL;
-constexpr std::size_t kMaximumFiles = 5;
+constexpr std::size_t kMaximumFiles = 12;
 
 struct Logger {
     std::mutex mutex;
@@ -141,7 +141,11 @@ void writer_loop() {
         }
         if (logger.bytes + line.size() > kMaximumFileBytes) { ++logger.part; if (!open_part()) continue; }
         DWORD written = 0; if (logger.file != INVALID_HANDLE_VALUE
-            && WriteFile(logger.file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr)) logger.bytes += written;
+            && WriteFile(logger.file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr)) {
+            logger.bytes += written;
+            // Diagnostic phase markers must survive a helper process being terminated after a hang timeout.
+            FlushFileBuffers(logger.file);
+        }
     }
     if (logger.file != INVALID_HANDLE_VALUE) { FlushFileBuffers(logger.file); CloseHandle(logger.file); logger.file = INVALID_HANDLE_VALUE; }
 }
@@ -157,7 +161,7 @@ void diagnostic_initialize() noexcept {
         GetModuleFileNameW(nullptr, module, static_cast<DWORD>(std::size(module)));
         const auto process_name = std::filesystem::path(module).filename().wstring();
         diagnostic_event("session.start", std::format(
-            L"version={} diagnostics=RelWithDebInfo process={} pid={} system_dpi={} virtual_screen=[{},{},{},{}] displays={}",
+            L"version={} diagnostics=RelWithDebInfo diagnostic_revision=r2 process={} pid={} system_dpi={} virtual_screen=[{},{},{},{}] displays={}",
             smk::app::kVersionText,
             process_name, GetCurrentProcessId(), GetDpiForSystem(),
             GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),

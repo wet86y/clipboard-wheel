@@ -1,10 +1,12 @@
 #include "platform/windows/ElevationService.h"
+#include "platform/windows/DiagnosticLog.h"
 
 #include <windows.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include <userenv.h>
 
+#include <format>
 #include <memory>
 
 namespace smk::windows {
@@ -40,12 +42,13 @@ DWORD explorer_process_id() {
 }
 
 bool is_administrator() noexcept {
-    BOOL member = FALSE; SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY; PSID group = nullptr;
-    if (AllocateAndInitializeSid(&authority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
-        0, 0, 0, 0, 0, 0, &group)) {
-        CheckTokenMembership(nullptr, group, &member); FreeSid(group);
-    }
-    return member != FALSE;
+    HANDLE token_raw = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token_raw)) return false;
+    unique_handle token(token_raw);
+    TOKEN_ELEVATION elevation{};
+    DWORD returned = 0;
+    return GetTokenInformation(token.get(), TokenElevation, &elevation, sizeof(elevation), &returned)
+        && elevation.TokenIsElevated != 0;
 }
 
 bool start_unelevated(const std::vector<std::wstring>& arguments, std::wstring& error) {
@@ -75,15 +78,29 @@ bool start_unelevated(const std::vector<std::wstring>& arguments, std::wstring& 
 }
 
 bool restart_with_privilege(bool elevated, std::wstring& error) {
-    if (!elevated) return start_unelevated({L"--admin-restart"}, error);
+    SMK_DIAGNOSTIC_EVENT("elevation.restart.request", std::wstring(L"requested=")
+        + (elevated ? L"elevated" : L"standard") + L" current_elevated="
+        + (is_administrator() ? L"true" : L"false"));
+    if (!elevated) {
+        const bool started = start_unelevated({L"--admin-restart"}, error);
+        SMK_DIAGNOSTIC_EVENT("elevation.restart.result", std::wstring(L"requested=standard success=")
+            + (started ? L"true" : L"false") + (started ? L"" : L" error_present=true"));
+        return started;
+    }
     const auto executable = executable_path();
     SHELLEXECUTEINFOW info{sizeof(info)}; info.fMask = SEE_MASK_NOCLOSEPROCESS;
     info.hwnd = nullptr; info.lpVerb = L"runas"; info.lpFile = executable.c_str(); info.lpParameters = L"--admin-restart";
     info.lpDirectory = nullptr; info.nShow = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&info)) {
-        error = GetLastError() == ERROR_CANCELLED ? L"已取消管理员权限请求。" : L"管理员模式进程启动失败。";
+        const DWORD code = GetLastError();
+        error = code == ERROR_CANCELLED ? L"已取消管理员权限请求。" : L"管理员模式进程启动失败。";
+        SMK_DIAGNOSTIC_EVENT("elevation.restart.result", std::format(
+            L"requested=elevated success=false error={}", code));
         return false;
     }
+    [[maybe_unused]] const DWORD child_pid = info.hProcess ? GetProcessId(info.hProcess) : 0;
+    SMK_DIAGNOSTIC_EVENT("elevation.restart.result", std::format(
+        L"requested=elevated success=true child_pid={}", child_pid));
     if (info.hProcess) CloseHandle(info.hProcess); return true;
 }
 

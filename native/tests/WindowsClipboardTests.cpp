@@ -5,6 +5,7 @@
 #include "platform/windows/MouseHook.h"
 #include "platform/windows/ShortcutDropTarget.h"
 #include "platform/windows/ShortcutIconResolver.h"
+#include "platform/windows/SingleInstance.h"
 #include "platform/windows/TrayIcon.h"
 #include "platform/windows/WindowsClipboardHistory.h"
 
@@ -21,6 +22,8 @@
 #include <cstddef>
 #include <cstring>
 #include <cstdlib>
+#include <filesystem>
+#include <format>
 #include <iostream>
 #include <utility>
 #include <vector>
@@ -203,6 +206,20 @@ bool wait_until(Predicate predicate, DWORD timeout = 5000) {
 int main() {
     if (wcsstr(GetCommandLineW(), L"--extended-action-helper")) return run_action_helper();
     if (FAILED(OleInitialize(nullptr))) return EXIT_FAILURE;
+    {
+        const auto mutex_name = std::format(L"Local\\SuperMiddleKey.SingleInstance.Test.{}", GetCurrentProcessId());
+        smk::windows::SingleInstance first;
+        smk::windows::SingleInstance second;
+        expect(first.acquire(mutex_name.c_str()), "single-instance mutex is acquired");
+        first.release();
+        expect(!first.owns_mutex(), "single-instance mutex can be released before background shutdown");
+        expect(second.acquire(mutex_name.c_str()), "a replacement process can acquire the released mutex");
+        second.release();
+    }
+    const auto missing_shell_target = (std::filesystem::temp_directory_path() /
+        (L"SuperMiddleKey-Missing-Shell-Target-" + std::to_wstring(GetCurrentProcessId()))).wstring();
+    expect(smk::windows::run_shell_open_helper(missing_shell_target) != ERROR_SUCCESS,
+        "STA shell helper reports a missing target without entering the application instance path");
     constexpr UINT width = 720, height = 360;
     std::vector<std::uint8_t> zero_alpha(static_cast<std::size_t>(width) * height * 4);
     for (std::size_t index = 0; index < zero_alpha.size(); index += 4) {

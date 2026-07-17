@@ -3,6 +3,7 @@
 
 #include "platform/windows/AutoStart.h"
 #include "platform/windows/CrashHandler.h"
+#include "platform/windows/DiagnosticLog.h"
 #include "platform/windows/ElevationService.h"
 #include "platform/windows/StartupTrace.h"
 #include "platform/windows/ShortcutDropHelper.h"
@@ -48,6 +49,19 @@ constexpr UINT kInputHeartbeatMs = 250;
 AppHost::~AppHost() { shutdown(); }
 
 int AppHost::run(HINSTANCE instance, const std::vector<std::wstring>& arguments) {
+    SMK_DIAGNOSTIC_EVENT("process.arguments", std::format(
+        L"count={} admin_restart={} shortcut_helper={} shell_helper={} verify_release={}", arguments.size(),
+        has_argument(arguments, L"--admin-restart"), has_argument(arguments, L"--shortcut-drop-helper"),
+        has_argument(arguments, L"--shell-open-helper"),
+        has_argument(arguments, L"--verify-release")));
+    if (const auto target = argument_value(arguments, L"--shell-open-helper"))
+        return smk::windows::run_shell_open_helper(*target);
+#if defined(SMK_DIAGNOSTICS)
+    if (has_argument(arguments, L"--diagnostic-shell-hang-helper"))
+        return smk::windows::run_shell_hang_helper_test();
+    if (has_argument(arguments, L"--diagnostic-shell-timeout-test"))
+        return smk::windows::run_shell_timeout_self_test();
+#endif
     for (std::size_t index = 0; index + 1 < arguments.size(); ++index) {
         if (_wcsicmp(arguments[index].c_str(), L"--shortcut-drop-helper") == 0)
             return smk::windows::run_shortcut_drop_helper(instance, arguments[index + 1]);
@@ -93,6 +107,9 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
 
     settings_ = settings_store_.load();
     SMK_STARTUP_TRACE(L"settings loaded");
+    SMK_DIAGNOSTIC_EVENT("elevation.state", std::format(
+        L"process_elevated={} setting_enabled={} admin_restart={}",
+        smk::windows::is_administrator(), settings_.run_as_administrator_enabled, takeover));
     enabled_ = settings_.mouse.middle_button_capture_enabled;
     if (!wheel_.create(instance)) {
         SMK_STARTUP_TRACE(L"wheel create failed HRESULT=" + std::to_wstring(static_cast<unsigned long>(wheel_.creation_error())));
@@ -178,6 +195,7 @@ void AppHost::shutdown() {
         const ULONGLONG now = GetTickCount64();
         return now >= shutdown_deadline ? 0 : static_cast<DWORD>(shutdown_deadline - now);
     };
+    SMK_DIAGNOSTIC_EVENT("shutdown.stage", L"stage=cancel_input phase=begin");
     cancel_wheel_no_action();
     if (mouse_hook_) {
         mouse_hook_->set_enabled(false);
@@ -188,20 +206,35 @@ void AppHost::shutdown() {
         }
     }
     destroy_input_safety_window();
+    SMK_DIAGNOSTIC_EVENT("shutdown.stage", L"stage=cancel_input phase=end");
+    single_instance_.release();
+    SMK_DIAGNOSTIC_EVENT("shutdown.stage", L"stage=single_instance_released phase=end");
     if (extended_actions_) {
-        if (extended_actions_->shutdown(remaining_shutdown_ms())) extended_actions_.reset();
+        SMK_DIAGNOSTIC_EVENT("shutdown.stage", L"stage=extended_actions phase=begin");
+        const bool stopped = extended_actions_->shutdown(remaining_shutdown_ms());
+        SMK_DIAGNOSTIC_EVENT("shutdown.stage", std::format(
+            L"stage=extended_actions phase=end success={}", stopped));
+        if (stopped) extended_actions_.reset();
         else (void)extended_actions_.release();
     }
     settings_window_.detach_update_controller();
     if (updater_) {
-        if (updater_->shutdown(remaining_shutdown_ms())) updater_.reset();
+        SMK_DIAGNOSTIC_EVENT("shutdown.stage", L"stage=updater phase=begin");
+        const bool stopped = updater_->shutdown(remaining_shutdown_ms());
+        SMK_DIAGNOSTIC_EVENT("shutdown.stage", std::format(
+            L"stage=updater phase=end success={}", stopped));
+        if (stopped) updater_.reset();
         else {
             SMK_STARTUP_TRACE(L"update worker stop timed out; retaining isolated worker state until process exit");
             (void)updater_.release();
         }
     }
     if (windows_history_) {
-        if (windows_history_->stop(remaining_shutdown_ms())) windows_history_.reset();
+        SMK_DIAGNOSTIC_EVENT("shutdown.stage", L"stage=windows_history phase=begin");
+        const bool stopped = windows_history_->stop(remaining_shutdown_ms());
+        SMK_DIAGNOSTIC_EVENT("shutdown.stage", std::format(
+            L"stage=windows_history phase=end success={}", stopped));
+        if (stopped) windows_history_.reset();
         else (void)windows_history_.release();
     }
     clipboard_.reset();
@@ -353,6 +386,8 @@ void AppHost::finish_wheel(POINT point) {
     wheel_.hide();
     if (lock_changed_) return;
     if (const auto* action = std::get_if<smk::core::ExtendedWheelActionSlot>(&selection)) {
+        SMK_DIAGNOSTIC_EVENT("extended.selected", std::format(
+            L"slot={} mode={} configured={}", action->slot_index, action->mode, action->configured()));
         if (extended_actions_) extended_actions_->enqueue(*action);
         return;
     }
@@ -425,6 +460,10 @@ std::optional<smk::core::AppSettings> AppHost::save_settings(const smk::core::Ap
     if (updater_) updater_->set_acceleration(settings_.update.use_acceleration_nodes);
     tray_.set_enabled(enabled_);
     if (settings_.run_as_administrator_enabled != smk::windows::is_administrator()) {
+        SMK_DIAGNOSTIC_EVENT("elevation.setting_changed", std::format(
+            L"requested={} previous_setting={} current_process_elevated={}",
+            settings_.run_as_administrator_enabled, previous.run_as_administrator_enabled,
+            smk::windows::is_administrator()));
         if (!smk::windows::restart_with_privilege(settings_.run_as_administrator_enabled, error)) {
             settings_.run_as_administrator_enabled = previous.run_as_administrator_enabled;
             std::wstring ignored;

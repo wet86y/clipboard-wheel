@@ -18,7 +18,7 @@ int main() {
         (L"SuperMiddleKeyDiagnosticTests-" + std::to_wstring(GetCurrentProcessId()));
     const auto log_directory = temporary_root / L"超级中键" / L"logs";
     std::filesystem::create_directories(log_directory);
-    for (int index = 0; index < 7; ++index)
+    for (int index = 0; index < 15; ++index)
         std::ofstream(log_directory / (L"native-diagnostic-old-" + std::to_wstring(index) + L".log")) << "old\n";
     SetEnvironmentVariableW(L"LOCALAPPDATA", temporary_root.c_str());
     smk::windows::diagnostic_initialize();
@@ -46,8 +46,8 @@ int main() {
     std::size_t log_count = 0;
     for (const auto& item : std::filesystem::directory_iterator(log_directory))
         if (item.path().filename().wstring().starts_with(L"native-diagnostic-")) ++log_count;
-    if (log_count > 5) {
-        std::cerr << "Diagnostic log retention exceeded five files.\n";
+    if (log_count > 12) {
+        std::cerr << "Diagnostic log retention exceeded twelve files.\n";
         return EXIT_FAILURE;
     }
     SetEnvironmentVariableW(L"LOCALAPPDATA", original_local_app_data);
