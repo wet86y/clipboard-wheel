@@ -34,6 +34,7 @@ struct ImageClipboardPayload {
     UINT width, UINT height, const std::vector<std::uint8_t>& pixels);
 [[nodiscard]] Microsoft::WRL::ComPtr<IDataObject> create_image_data_object(const ImageClipboardPayload& payload);
 [[nodiscard]] Microsoft::WRL::ComPtr<IDataObject> create_clipboard_data_object(
-    const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode);
+    const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode,
+    std::optional<std::wstring> plain_text_override = std::nullopt);
 
 } // namespace smk::windows

@@ -4,6 +4,7 @@
 #include "core/Settings.h"
 #include "platform/windows/HotkeyCaptureHook.h"
 #include "platform/windows/HotkeyCodec.h"
+#include "platform/windows/ManagedShortcutStore.h"
 #include "platform/windows/ShortcutDropTarget.h"
 #include "ui/SettingsVisualLayout.h"
 #include "updater/UpdateTypes.h"
@@ -18,6 +19,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace smk::ui {
 
@@ -101,6 +103,7 @@ private:
     void record_hotkey(WPARAM key, LPARAM key_data);
     void choose_shortcut();
     void accept_shortcut_path(const std::wstring& path);
+    void discard_managed_shortcut_candidates() noexcept;
     void start_shortcut_drop_handoff();
     void poll_shortcut_drop_handoff();
     void apply_update_state(const smk::updater::UpdateViewState& state);
@@ -155,6 +158,7 @@ private:
     HWND opacity_value_ = nullptr;
     HWND quick_copy_ = nullptr;
     HWND capture_images_ = nullptr;
+    HWND clean_spreadsheet_text_ = nullptr;
     HWND auto_start_ = nullptr;
     HWND administrator_ = nullptr;
     HWND admin_status_ = nullptr;
@@ -190,6 +194,8 @@ private:
     std::wstring pending_handoff_id_;
     ULONGLONG handoff_deadline_ = 0;
     smk::windows::ShortcutDropRegistration shortcut_drop_;
+    smk::windows::ManagedShortcutStore managed_shortcuts_;
+    std::vector<std::wstring> managed_shortcut_candidates_;
     smk::windows::ShortcutDropVisualState shortcut_drop_state_ =
         smk::windows::ShortcutDropVisualState::idle;
     HICON slot_icon_handle_ = nullptr;
@@ -203,7 +209,7 @@ private:
         ULONGLONG started_at = 0;
         bool active = false;
     };
-    std::array<SwitchAnimation, 6> switch_animations_{};
+    std::array<SwitchAnimation, 7> switch_animations_{};
     smk::core::AppSettings settings_{};
     smk::core::AppSettings committed_settings_{};
     smk::core::ExtendedWheelVisualLayout preview_visual_layout_{};
@@ -212,7 +218,7 @@ private:
     SaveCallback save_{};
     smk::updater::UpdateController* update_controller_ = nullptr;
     smk::updater::UpdateViewState update_state_{};
-    std::wstring version_text_ = L"2.0.2";
+    std::wstring version_text_ = L"2.1.1";
     double release_notes_scroll_ = 0.0;
     double release_notes_extent_ = 0.0;
     bool release_notes_dragging_ = false;

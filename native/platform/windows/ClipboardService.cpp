@@ -331,6 +331,7 @@ bool ClipboardService::paste_entry(const smk::core::ClipboardEntry& entry, smk::
     }
     pending_entry_ = entry;
     pending_mode_ = smk::core::resolve_paste_mode(entry, requested);
+    pending_plain_text_ = smk::core::paste_plain_text(entry, clean_spreadsheet_plain_text_);
     pending_started_ = GetTickCount64();
     suppress_capture_until_ = pending_started_ + kRetryTimeoutMs + 250;
     capture_coalescer_.cancel();
@@ -352,7 +353,8 @@ bool ClipboardService::clipboard_already_has_plain_text(const smk::core::Clipboa
     if (FAILED(OleGetClipboard(&raw)) || !raw) return false;
     std::unique_ptr<IDataObject, void (*)(IDataObject*)> data(raw, [](IDataObject* value) { value->Release(); });
     const auto current = read_text_format(data.get(), CF_UNICODETEXT, true);
-    return smk::core::can_skip_clipboard_write(entry, pending_mode_, current);
+    return smk::core::can_skip_clipboard_write(
+        entry, pending_mode_, current, std::wstring_view(pending_plain_text_));
 }
 
 bool ClipboardService::attempt_pending_paste() {
@@ -379,7 +381,7 @@ bool ClipboardService::attempt_pending_paste() {
             }
             original_clipboard_.Attach(original);
         }
-        auto data = create_clipboard_data_object(*pending_entry_, pending_mode_);
+        auto data = create_clipboard_data_object(*pending_entry_, pending_mode_, pending_plain_text_);
         const HRESULT result = data ? OleSetClipboard(data.Get()) : E_OUTOFMEMORY;
         if (data && SUCCEEDED(result)) {
             owned_clipboard_ = std::move(data);
@@ -424,6 +426,7 @@ void ClipboardService::fail_pending_paste(std::wstring_view stage, DWORD error) 
     }
     restore_original_clipboard();
     pending_entry_.reset();
+    pending_plain_text_.clear();
     paste_target_ = nullptr;
     (void)stage;
     (void)error;

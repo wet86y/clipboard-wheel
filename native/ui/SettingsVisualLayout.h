@@ -37,7 +37,7 @@ struct BasicPageLayout {
     UiRect sector_combo{};
     std::array<UiRect, 3> sliders{};
     std::array<UiRect, 3> values{};
-    std::array<UiRect, 4> switches{};
+    std::array<UiRect, 5> switches{};
     double content_height = 0.0;
 };
 

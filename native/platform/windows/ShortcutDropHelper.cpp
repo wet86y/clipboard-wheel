@@ -167,14 +167,14 @@ void paint_helper(State& state) {
         state.render_target->DrawLine(D2D1::Point2F(426, 15), D2D1::Point2F(410, 31), text.Get(), 1.35f);
 
         ID2D1SolidColorBrush* state_border = border.Get();
-        const wchar_t* primary = L"拖入一个 .lnk 快捷方式";
+        const wchar_t* primary = L"拖入一个程序、文件、文件夹或 .lnk";
         const wchar_t* secondary_text = L"普通权限窗口会安全地把结果交回设置页";
         if (state.visual_state == ShortcutDropVisualState::accept) {
             state_border = glow.Get(); primary = L"松开以导入快捷方式";
-            secondary_text = L"已识别一个有效的 Windows 快捷方式";
+            secondary_text = L"已识别一个可导入的本地项目";
         } else if (state.visual_state == ShortcutDropVisualState::reject) {
             state_border = red.Get(); primary = L"无法导入此拖放内容";
-            secondary_text = L"请只拖入一个现有的 .lnk 文件";
+            secondary_text = L"请只拖入一个现有的本地项目";
         } else if (state.visual_state == ShortcutDropVisualState::success) {
             state_border = accent.Get(); primary = L"导入成功";
             secondary_text = L"正在返回管理员设置窗口";
@@ -243,7 +243,7 @@ LRESULT CALLBACK helper_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                         state->visual_state = ShortcutDropVisualState::success;
                         InvalidateRect(state->window, nullptr, FALSE);
                         SetTimer(state->window, kSuccessTimer, 360, nullptr);
-                        SMK_DIAGNOSTIC_EVENT("shortcut_drop.result", L"result=success extension=.lnk");
+                        SMK_DIAGNOSTIC_EVENT("shortcut_drop.result", L"result=success kind=filesystem_path");
                     } else {
                         state->visual_state = ShortcutDropVisualState::reject;
                         InvalidateRect(state->window, nullptr, FALSE);

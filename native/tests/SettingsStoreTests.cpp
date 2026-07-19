@@ -64,7 +64,7 @@ void legacy_upgrade_test(const std::filesystem::path& root) {
 
     smk::windows::SettingsStore store(current, legacy);
     const auto settings = store.load();
-    expect(settings.settings_version == 3, "legacy settings upgrade to version 3");
+    expect(settings.settings_version == 4, "legacy settings upgrade to version 4");
     expect(settings.auto_start_enabled && settings.run_as_administrator_enabled,
         "legacy top-level booleans survive upgrade");
     expect(settings.wheel.shape == L"rectangle" && settings.wheel.sector_count == 8
@@ -73,7 +73,8 @@ void legacy_upgrade_test(const std::filesystem::path& root) {
     expect(settings.wheel.extended_wheel.enabled
         && settings.wheel.extended_wheel.slots[4].hotkey == L"Ctrl+Alt+E",
         "legacy extended wheel slots survive upgrade");
-    expect(settings.clipboard.capture_images && settings.clipboard.max_history_items == 8,
+    expect(settings.clipboard.capture_images && settings.clipboard.max_history_items == 8
+        && !settings.clipboard.clean_spreadsheet_plain_text,
         "bad individual fields fall back without discarding valid settings");
     expect(!settings.update.use_acceleration_nodes, "legacy update preference survives upgrade");
     expect(std::filesystem::exists(current / L"settings.json"), "upgraded settings are written to current directory");
@@ -82,6 +83,8 @@ void legacy_upgrade_test(const std::filesystem::path& root) {
     expect(converted.find("\"settingsVersion\"") != std::string::npos
         && converted.find("\"SettingsVersion\"") == std::string::npos,
         "converted settings use canonical lower camel case");
+    expect(converted.find("\"cleanSpreadsheetPlainText\":false") != std::string::npos,
+        "version 4 migration writes the default-off spreadsheet text cleaner");
     expect(converted.find("\"defaultCaptureMode\"") == std::string::npos
         && converted.find("\"paste\"") == std::string::npos
         && converted.find("\"processRules\"") == std::string::npos,
@@ -103,7 +106,7 @@ void native_pascal_case_test(const std::filesystem::path& root) {
 
 void future_version_test(const std::filesystem::path& root) {
     const auto current = root / L"future";
-    const std::string json = R"({"settingsVersion":4,"wheel":{"radius":321}})";
+    const std::string json = R"({"settingsVersion":5,"wheel":{"radius":321}})";
     write_bytes(current / L"settings.json", json);
     smk::windows::SettingsStore store(current);
     const auto settings = store.load();

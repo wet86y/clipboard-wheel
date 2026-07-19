@@ -106,10 +106,9 @@ private:
 bool is_valid_shortcut_drop_path(const std::wstring& path) noexcept {
     try {
         if (path.empty() || std::filesystem::path(path).is_relative()) return false;
-        const auto extension = std::filesystem::path(path).extension().wstring();
-        if (_wcsicmp(extension.c_str(), L".lnk") != 0) return false;
         std::error_code ignored;
-        return std::filesystem::is_regular_file(path, ignored) && !ignored;
+        const bool exists = std::filesystem::exists(path, ignored);
+        return exists && !ignored;
     } catch (...) {
         return false;
     }

@@ -85,6 +85,9 @@ public:
     bool start(HINSTANCE instance);
     void stop();
     void set_capture_images(bool enabled) noexcept { capture_images_ = enabled; }
+    void set_clean_spreadsheet_plain_text(bool enabled) noexcept {
+        clean_spreadsheet_plain_text_ = enabled;
+    }
     bool capture_current();
     bool paste_entry(const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode);
     [[nodiscard]] static std::optional<smk::core::ClipboardEntry> create_entry_from_data_object(
@@ -110,8 +113,10 @@ private:
     smk::core::ClipboardHistory& history_;
     ChangedCallback changed_;
     bool capture_images_ = false;
+    bool clean_spreadsheet_plain_text_ = false;
     std::optional<smk::core::ClipboardEntry> pending_entry_;
     smk::core::PasteMode pending_mode_ = smk::core::PasteMode::smart;
+    std::wstring pending_plain_text_;
     ULONGLONG pending_started_ = 0;
     HWND paste_target_ = nullptr;
     bool clipboard_replaced_ = false;

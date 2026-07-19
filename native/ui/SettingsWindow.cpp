@@ -36,6 +36,7 @@ constexpr int kSave = 2001, kClose = 2002, kTab = 2003;
 constexpr int kShapeCircle = 2010, kShapeRectangle = 2011, kSectors = 2012;
 constexpr int kRadius = 2013, kDeadZone = 2014, kOpacity = 2015;
 constexpr int kQuickCopy = 2016, kCaptureImages = 2017, kAutoStart = 2018, kAdministrator = 2019;
+constexpr int kCleanSpreadsheetText = 2020;
 constexpr int kExtended = 2030, kBreakout = 2031, kPreview = 2032, kSlotMode = 2033;
 constexpr int kSlotName = 2034, kSlotAction = 2035, kSlotBehavior = 2036, kBrowserUrl = 2037;
 constexpr int kSlotValue = 2038, kRepositoryLink = 2040;
@@ -291,6 +292,7 @@ void draw_line_icon(ID2D1RenderTarget* target, IconKind kind, const UiRect& box,
 } // namespace
 
 SettingsWindow::~SettingsWindow() {
+    discard_managed_shortcut_candidates();
     detach_update_controller();
     hotkey_capture_.stop();
     shortcut_drop_.reset();
@@ -360,7 +362,11 @@ bool SettingsWindow::create(HINSTANCE instance, SaveCallback save_callback,
     create_controls();
     HRESULT drop_error = S_OK;
     (void)shortcut_drop_.register_window(slot_value_, {
-        [this] { return SendMessageW(slot_mode_, CB_GETCURSEL, 0, 0) == 1; },
+        [this] {
+            if (SendMessageW(slot_mode_, CB_GETCURSEL, 0, 0) != 1) return false;
+            const auto& slot = settings_.wheel.extended_wheel.slots[static_cast<std::size_t>(selected_slot_)];
+            return slot.shortcut_path.empty();
+        },
         [this](smk::windows::ShortcutDropVisualState state) {
             shortcut_drop_state_ = state;
             InvalidateRect(slot_value_, nullptr, FALSE);
@@ -378,6 +384,7 @@ bool SettingsWindow::create(HINSTANCE instance, SaveCallback save_callback,
 }
 
 void SettingsWindow::show(const smk::core::AppSettings& settings) {
+    discard_managed_shortcut_candidates();
     cancel_hotkey_recording();
     settings_ = settings;
     committed_settings_ = settings;
@@ -608,6 +615,7 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
     }
     case WM_CLOSE:
         cancel_hotkey_recording();
+        discard_managed_shortcut_candidates();
         if (update_controller_) update_controller_->settings_closed();
         ShowWindow(window_, SW_HIDE);
         return 0;
@@ -759,7 +767,8 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
             InvalidateRect(pages_[0], nullptr, FALSE); InvalidateRect(preview_, nullptr, FALSE); return 0;
         }
         if (id == kSectors && notification == CBN_SELCHANGE) { InvalidateRect(preview_, nullptr, FALSE); return 0; }
-        if (id == kQuickCopy || id == kCaptureImages || id == kAutoStart || id == kAdministrator || id == kExtended) {
+        if (id == kQuickCopy || id == kCaptureImages || id == kCleanSpreadsheetText
+            || id == kAutoStart || id == kAdministrator || id == kExtended) {
             animate_switch(reinterpret_cast<HWND>(lparam));
             if (id == kAdministrator) SetWindowTextW(admin_status_, L"保存后应用此模式");
             InvalidateRect(pages_[id == kExtended ? 1 : 0], nullptr, FALSE);
@@ -944,7 +953,8 @@ void SettingsWindow::create_controls() {
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(3000 + index)), instance_, this);
     }
     create_basic_page(); create_wheel_page(); create_about_page();
-    switch_animations_ = {{{quick_copy_}, {capture_images_}, {auto_start_}, {administrator_}, {extended_enabled_}, {about_acceleration_}}};
+    switch_animations_ = {{{quick_copy_}, {capture_images_}, {clean_spreadsheet_text_},
+        {auto_start_}, {administrator_}, {extended_enabled_}, {about_acceleration_}}};
     for (std::size_t index = 0; index < switch_animations_.size(); ++index)
         SetWindowSubclass(switch_animations_[index].control, switch_subclass_proc, index + 1, reinterpret_cast<DWORD_PTR>(this));
     save_button_ = make_control(instance_, window_, L"BUTTON", L"保存", BS_OWNERDRAW | WS_TABSTOP, kSave);
@@ -986,6 +996,8 @@ void SettingsWindow::create_basic_page() {
     opacity_value_ = make_label(instance_, page, L"", 0, SS_OWNERDRAW);
     quick_copy_ = make_control(instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kQuickCopy);
     capture_images_ = make_control(instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kCaptureImages);
+    clean_spreadsheet_text_ = make_control(
+        instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kCleanSpreadsheetText);
     auto_start_ = make_control(instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kAutoStart);
     administrator_ = make_control(instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kAdministrator);
     admin_status_ = make_label(instance_, page, L"");
@@ -1104,9 +1116,9 @@ void SettingsWindow::reposition_page_controls(int index) {
         const HWND sliders[]{radius_, dead_zone_, opacity_};
         const HWND labels[]{radius_value_, dead_zone_value_, opacity_value_};
         for (std::size_t i = 0; i < 3; ++i) { move_control(sliders[i], value.sliders[i], dpi_, scroll); move_control(labels[i], value.values[i], dpi_, scroll); }
-        const HWND switches[]{quick_copy_, capture_images_, auto_start_, administrator_};
-        for (std::size_t i = 0; i < 4; ++i) move_control(switches[i], value.switches[i], dpi_, scroll);
-        move_control(admin_status_, {320.0, 493.0, value.card.width - 430.0, 26.0}, dpi_, scroll);
+        const HWND switches[]{quick_copy_, capture_images_, clean_spreadsheet_text_, auto_start_, administrator_};
+        for (std::size_t i = 0; i < 5; ++i) move_control(switches[i], value.switches[i], dpi_, scroll);
+        move_control(admin_status_, {320.0, 509.0, value.card.width - 430.0, 26.0}, dpi_, scroll);
     } else if (index == 1) {
         const auto value = make_wheel_page_layout(chrome_.page_viewport.width, chrome_.page_viewport.height);
         move_control(extended_enabled_, value.extended_switch, dpi_, scroll);
@@ -1209,6 +1221,8 @@ void SettingsWindow::load_controls() {
     SendMessageW(opacity_, TBM_SETPOS, TRUE, static_cast<LPARAM>(settings_.wheel.opacity * 100.0));
     Button_SetCheck(quick_copy_, settings_.wheel.quick_copy ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(capture_images_, settings_.clipboard.capture_images ? BST_CHECKED : BST_UNCHECKED);
+    Button_SetCheck(clean_spreadsheet_text_,
+        settings_.clipboard.clean_spreadsheet_plain_text ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(auto_start_, settings_.auto_start_enabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(administrator_, settings_.run_as_administrator_enabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(extended_enabled_, settings_.wheel.extended_wheel.enabled ? BST_CHECKED : BST_UNCHECKED);
@@ -1217,7 +1231,8 @@ void SettingsWindow::load_controls() {
     SetWindowTextW(admin_status_, L"");
     loading_ = false;
     load_slot(0); update_value_labels();
-    for (auto control : {quick_copy_, capture_images_, auto_start_, administrator_, extended_enabled_, about_acceleration_})
+    for (auto control : {quick_copy_, capture_images_, clean_spreadsheet_text_, auto_start_,
+            administrator_, extended_enabled_, about_acceleration_})
         set_switch_value(control, Button_GetCheck(control) == BST_CHECKED);
     InvalidateRect(preview_, nullptr, FALSE);
 }
@@ -1232,6 +1247,8 @@ void SettingsWindow::save_controls() {
     settings_.wheel.opacity = SendMessageW(opacity_, TBM_GETPOS, 0, 0) / 100.0;
     settings_.wheel.quick_copy = Button_GetCheck(quick_copy_) == BST_CHECKED;
     settings_.clipboard.capture_images = Button_GetCheck(capture_images_) == BST_CHECKED;
+    settings_.clipboard.clean_spreadsheet_plain_text =
+        Button_GetCheck(clean_spreadsheet_text_) == BST_CHECKED;
     settings_.auto_start_enabled = Button_GetCheck(auto_start_) == BST_CHECKED;
     settings_.run_as_administrator_enabled = Button_GetCheck(administrator_) == BST_CHECKED;
     settings_.wheel.extended_wheel.enabled = Button_GetCheck(extended_enabled_) == BST_CHECKED;
@@ -1243,11 +1260,14 @@ void SettingsWindow::save_controls() {
         settings_.wheel.inner_dead_zone_radius, settings_.wheel.opacity, settings_.wheel.extended_wheel.enabled));
     const auto accepted = save_ ? save_(settings_) : std::optional<smk::core::AppSettings>(settings_);
     if (accepted) {
+        managed_shortcuts_.reconcile(committed_settings_, *accepted, managed_shortcut_candidates_);
+        managed_shortcut_candidates_.clear();
         settings_ = *accepted;
         committed_settings_ = *accepted;
         load_controls();
         ShowWindow(window_, SW_HIDE);
     } else {
+        discard_managed_shortcut_candidates();
         settings_ = committed_settings_;
         load_controls();
         SetWindowTextW(admin_status_, L"设置文件保存失败，请重试。");
@@ -1576,7 +1596,7 @@ void SettingsWindow::update_slot_editor() {
         update_shortcut_icon(slot.shortcut_path);
         SetWindowTextW(slot_action_, slot.shortcut_path.empty() ? L"选择" : L"清除");
         SetWindowTextW(slot_value_, slot.shortcut_path.empty()
-            ? smk::windows::is_administrator() ? L"点击打开普通权限拖放窗口，或点“选择”" : L"拖入 .lnk 快捷方式，或点“选择”"
+            ? smk::windows::is_administrator() ? L"点击打开普通权限拖放窗口，或点“选择”" : L"拖入程序、文件、文件夹或 .lnk，或点“选择”"
             : std::filesystem::path(slot.shortcut_path).stem().c_str());
     }
     ShowWindow(slot_behavior_label_, hotkey ? SW_HIDE : SW_SHOW); ShowWindow(slot_behavior_, hotkey ? SW_HIDE : SW_SHOW);
@@ -1662,8 +1682,31 @@ void SettingsWindow::choose_shortcut() {
 
 void SettingsWindow::accept_shortcut_path(const std::wstring& path) {
     if (!smk::windows::is_valid_shortcut_drop_path(path)) return;
-    settings_.wheel.extended_wheel.slots[static_cast<std::size_t>(selected_slot_)].shortcut_path = path;
+    auto accepted_path = path;
+    const auto source = std::filesystem::path(path);
+    const auto extension = source.extension().wstring();
+    std::error_code path_error;
+    const bool external_shortcut = _wcsicmp(extension.c_str(), L".lnk") == 0
+        && std::filesystem::is_regular_file(source, path_error) && !path_error;
+    if (!external_shortcut) {
+        std::wstring error;
+        const auto candidate = managed_shortcuts_.create_candidate(path, selected_slot_, error);
+        if (!candidate) {
+            MessageBoxW(window_, error.c_str(), L"超级中键", MB_OK | MB_ICONWARNING);
+            shortcut_drop_state_ = smk::windows::ShortcutDropVisualState::reject;
+            InvalidateRect(slot_value_, nullptr, FALSE);
+            return;
+        }
+        accepted_path = *candidate;
+        managed_shortcut_candidates_.push_back(accepted_path);
+    }
+    settings_.wheel.extended_wheel.slots[static_cast<std::size_t>(selected_slot_)].shortcut_path = accepted_path;
     update_slot_editor();
+}
+
+void SettingsWindow::discard_managed_shortcut_candidates() noexcept {
+    for (const auto& path : managed_shortcut_candidates_) managed_shortcuts_.discard(path);
+    managed_shortcut_candidates_.clear();
 }
 
 void SettingsWindow::start_shortcut_drop_handoff() {
@@ -1774,16 +1817,17 @@ void SettingsWindow::paint_basic_page(ID2D1RenderTarget* target, const BasicPage
     const wchar_t* toggle_texts[]{
         L"快捷复制：最后一个扇区执行 Ctrl+C",
         L"捕获图片：复制图片后在轮盘中显示缩略图",
+        L"表格文本清洗：以文本方式粘贴时去除空格和引号",
         L"开机自启动：登录 Windows 后自动运行",
         L"管理员模式运行",
     };
-    const IconKind icons[]{IconKind::link, IconKind::image, IconKind::power, IconKind::user};
-    for (std::size_t index = 0; index < 4; ++index) {
-        const double y = 366.0 + index * 40.0 - scroll;
+    const IconKind icons[]{IconKind::link, IconKind::image, IconKind::refresh, IconKind::power, IconKind::user};
+    for (std::size_t index = 0; index < 5; ++index) {
+        const double y = 366.0 + index * 34.0 - scroll;
         if (index > 0) target->DrawLine(D2D1::Point2F(20, static_cast<float>(y - 5)),
             D2D1::Point2F(static_cast<float>(layout.card.width - 20), static_cast<float>(y - 5)), border_brush_.Get(), 0.7f);
         target->DrawRoundedRectangle(rounded({24, y + 1, 32, 32}, 7), border_brush_.Get(), 1.0f);
-        draw_line_icon(target, icons[index], {31, y + 8, 18, 18}, index >= 2 ? red_brush_.Get() : glow_brush_.Get());
+        draw_line_icon(target, icons[index], {31, y + 8, 18, 18}, index >= 3 ? red_brush_.Get() : glow_brush_.Get());
         draw_text(target, body_format_.Get(), text_brush_.Get(), toggle_texts[index], {68, y, layout.card.width - 174, 34});
     }
 }

@@ -3,6 +3,7 @@
 #include "platform/windows/ExtendedActionExecutor.h"
 #include "platform/windows/HotkeyCaptureHook.h"
 #include "platform/windows/MouseHook.h"
+#include "platform/windows/ManagedShortcutStore.h"
 #include "platform/windows/ShortcutDropTarget.h"
 #include "platform/windows/ShortcutIconResolver.h"
 #include "platform/windows/SingleInstance.h"
@@ -23,6 +24,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <format>
 #include <iostream>
 #include <utility>
@@ -39,6 +41,28 @@ void expect(bool condition, const char* message) {
 bool offers(IDataObject* data, CLIPFORMAT format, DWORD medium) {
     FORMATETC request{format, nullptr, DVASPECT_CONTENT, -1, medium};
     return SUCCEEDED(data->QueryGetData(&request));
+}
+
+std::wstring read_unicode_text(IDataObject* data) {
+    FORMATETC request{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    if (!data || FAILED(data->GetData(&request, &medium))) return {};
+    const auto* value = static_cast<const wchar_t*>(GlobalLock(medium.hGlobal));
+    const std::wstring result = value ? value : L"";
+    if (value) GlobalUnlock(medium.hGlobal);
+    ReleaseStgMedium(&medium);
+    return result;
+}
+
+std::string read_encoded_text(IDataObject* data, CLIPFORMAT format) {
+    FORMATETC request{format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium{};
+    if (!data || FAILED(data->GetData(&request, &medium))) return {};
+    const auto* value = static_cast<const char*>(GlobalLock(medium.hGlobal));
+    const std::string result = value ? value : "";
+    if (value) GlobalUnlock(medium.hGlobal);
+    ReleaseStgMedium(&medium);
+    return result;
 }
 
 HGLOBAL copy_test_global(const void* bytes, std::size_t size) {
@@ -327,6 +351,19 @@ int main() {
         && offers(text_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Rich Text Format")), TYMED_HGLOBAL)
         && offers(text_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Csv")), TYMED_HGLOBAL),
         "formatted data object advertises HTML, RTF, and CSV together");
+    rich_text.looks_like_spreadsheet = true;
+    const auto cleaned_text = smk::core::clean_spreadsheet_plain_text(L" 中文\t“text”\r\n");
+    auto cleaned_data = smk::windows::create_clipboard_data_object(
+        rich_text, smk::core::PasteMode::formatted, cleaned_text);
+    expect(read_unicode_text(cleaned_data.Get()) == L"中文text\r\n",
+        "formatted spreadsheet payload exposes cleaned Unicode text to edit-mode targets");
+    expect(read_encoded_text(cleaned_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"HTML Format")))
+            == "<b>中文 text</b>"
+        && read_encoded_text(cleaned_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Rich Text Format")))
+            == "{\\rtf1 text}"
+        && read_encoded_text(cleaned_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Csv")))
+            == "a,b",
+        "spreadsheet text cleaning leaves HTML, RTF, and CSV payloads unchanged");
 
     smk::windows::ClipboardCaptureRetryState capture_retry;
     const auto first_generation = capture_retry.begin();
@@ -587,8 +624,59 @@ int main() {
         expect(smk::windows::is_valid_shortcut_drop_path(shortcut_path),
             "drop validation accepts one existing absolute shortcut");
         expect(!smk::windows::is_valid_shortcut_drop_path(L"relative.lnk")
-            && !smk::windows::is_valid_shortcut_drop_path(executable),
-            "drop validation rejects relative paths and non-shortcut files");
+            && smk::windows::is_valid_shortcut_drop_path(executable),
+            "drop validation rejects relative paths and accepts an existing executable");
+
+        const auto managed_root = std::filesystem::path(temporary)
+            / (L"smk-managed-shortcuts-" + std::to_wstring(GetCurrentProcessId()));
+        const auto document_path = managed_root.parent_path()
+            / (L"smk-document-" + std::to_wstring(GetCurrentProcessId()) + L".txt");
+        const auto folder_path = managed_root.parent_path()
+            / (L"smk-folder-" + std::to_wstring(GetCurrentProcessId()));
+        { std::ofstream document(document_path); document << "test"; }
+        std::filesystem::create_directories(folder_path);
+        smk::windows::ManagedShortcutStore managed_store(managed_root);
+        std::wstring managed_error;
+        const auto executable_candidate = managed_store.create_candidate(executable, 0, managed_error);
+        const auto document_candidate = managed_store.create_candidate(document_path.wstring(), 1, managed_error);
+        const auto folder_candidate = managed_store.create_candidate(folder_path.wstring(), 2, managed_error);
+        expect(executable_candidate && document_candidate && folder_candidate,
+            "managed shortcut store creates candidates for programs, documents, and folders");
+        const auto resolved_executable = executable_candidate
+            ? smk::windows::resolve_shortcut(*executable_candidate) : std::nullopt;
+        const auto resolved_document = document_candidate
+            ? smk::windows::resolve_shortcut(*document_candidate) : std::nullopt;
+        const auto resolved_folder = folder_candidate
+            ? smk::windows::resolve_shortcut(*folder_candidate) : std::nullopt;
+        expect(resolved_executable && resolved_executable->target_path == executable
+            && resolved_document && resolved_document->target_path == document_path.wstring()
+            && resolved_folder && resolved_folder->target_path == folder_path.wstring(),
+            "generated shortcuts resolve back to their original filesystem targets");
+        expect(folder_candidate && std::filesystem::path(*folder_candidate).stem() == folder_path.filename(),
+            "generated shortcut filename preserves the source display name");
+        managed_store.discard(shortcut_path);
+        expect(std::filesystem::exists(shortcut_path),
+            "managed shortcut cleanup never deletes an external shortcut");
+        smk::core::AppSettings previous_settings;
+        smk::core::AppSettings accepted_settings;
+        if (executable_candidate) {
+            previous_settings.wheel.extended_wheel.slots[0].shortcut_path = *executable_candidate;
+            accepted_settings.wheel.extended_wheel.slots[0].shortcut_path = *executable_candidate;
+            managed_store.reconcile(previous_settings, accepted_settings, {*executable_candidate});
+            expect(std::filesystem::exists(*executable_candidate),
+                "saving a candidate retains the active managed shortcut");
+            managed_store.reconcile(accepted_settings, smk::core::AppSettings{}, {});
+            expect(!std::filesystem::exists(*executable_candidate),
+                "saving a cleared slot removes its previous managed shortcut");
+        }
+        managed_store.cleanup_unreferenced(smk::core::AppSettings{});
+        expect((!document_candidate || !std::filesystem::exists(*document_candidate))
+            && (!folder_candidate || !std::filesystem::exists(*folder_candidate)),
+            "startup cleanup removes unreferenced managed shortcut candidates");
+        std::error_code managed_cleanup_error;
+        std::filesystem::remove(document_path, managed_cleanup_error);
+        std::filesystem::remove_all(folder_path, managed_cleanup_error);
+        std::filesystem::remove_all(managed_root, managed_cleanup_error);
 
         std::vector<smk::windows::ShortcutDropVisualState> drop_states;
         std::wstring dropped_path;
@@ -611,6 +699,15 @@ int main() {
                 && drop_states.back() == smk::windows::ShortcutDropVisualState::success,
                 "a valid native OLE drop is accepted without a compatibility message handoff");
             valid_drop->Release();
+
+            auto* executable_drop = new ShortcutDropDataObject({executable});
+            effect = DROPEFFECT_COPY;
+            expect(SUCCEEDED(target->DragEnter(executable_drop, 0, {}, &effect))
+                && effect == DROPEFFECT_COPY
+                && SUCCEEDED(target->Drop(executable_drop, 0, {}, &effect))
+                && dropped_path == executable,
+                "native OLE drop target accepts one existing program path");
+            executable_drop->Release();
 
             auto* multiple_drop = new ShortcutDropDataObject({shortcut_path, shortcut_path});
             effect = DROPEFFECT_COPY;

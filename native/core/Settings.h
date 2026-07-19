@@ -5,7 +5,7 @@
 
 namespace smk::core {
 
-inline constexpr int kCurrentSettingsVersion = 3;
+inline constexpr int kCurrentSettingsVersion = 4;
 inline constexpr int kExtendedSlotCount = 12;
 
 struct ExtendedWheelActionSlot {
@@ -61,6 +61,7 @@ struct MouseSettings {
 struct ClipboardSettings {
     int max_history_items = 8;
     bool capture_images = false;
+    bool clean_spreadsheet_plain_text = false;
 };
 
 struct UpdateSettings {

@@ -316,8 +316,9 @@ HGLOBAL make_encoded_text(const std::wstring& text, UINT code_page) {
 
 class TextDataObject final : public IDataObject {
 public:
-    TextDataObject(smk::core::ClipboardEntry entry, smk::core::PasteMode mode)
-        : entry_(std::move(entry)), mode_(mode) {
+    TextDataObject(smk::core::ClipboardEntry entry, smk::core::PasteMode mode,
+        std::optional<std::wstring> plain_text_override)
+        : entry_(std::move(entry)), mode_(mode), plain_text_override_(std::move(plain_text_override)) {
         html_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"HTML Format"));
         rtf_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Rich Text Format"));
         csv_ = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Csv"));
@@ -342,7 +343,9 @@ public:
         if (!request || !medium) return E_POINTER; std::memset(medium, 0, sizeof(*medium));
         if (FAILED(QueryGetData(request))) return DV_E_FORMATETC;
         medium->tymed = TYMED_HGLOBAL;
-        const auto& text = entry_.plain_text.empty() ? entry_.display_text : entry_.plain_text;
+        const auto& text = plain_text_override_
+            ? *plain_text_override_
+            : (entry_.plain_text.empty() ? entry_.display_text : entry_.plain_text);
         if (request->cfFormat == CF_UNICODETEXT) {
             medium->hGlobal = copy_global(text.c_str(), (text.size() + 1) * sizeof(wchar_t));
         } else if (request->cfFormat == CF_TEXT) {
@@ -378,6 +381,7 @@ private:
     std::atomic<ULONG> references_{1};
     smk::core::ClipboardEntry entry_;
     smk::core::PasteMode mode_;
+    std::optional<std::wstring> plain_text_override_;
     CLIPFORMAT html_{}, rtf_{}, csv_{}, history_{};
     std::vector<FORMATETC> formats_;
 };
@@ -425,13 +429,14 @@ ComPtr<IDataObject> create_image_data_object(const ImageClipboardPayload& payloa
 }
 
 ComPtr<IDataObject> create_clipboard_data_object(
-    const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode) {
+    const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode,
+    std::optional<std::wstring> plain_text_override) {
     if (entry.is_image_content && entry.has_image()) {
         const auto payload = normalize_png_payload(entry.image_bytes());
         return payload ? create_image_data_object(*payload) : ComPtr<IDataObject>{};
     }
     ComPtr<IDataObject> result;
-    result.Attach(new TextDataObject(entry, mode));
+    result.Attach(new TextDataObject(entry, mode, std::move(plain_text_override)));
     return result;
 }
 

@@ -26,7 +26,7 @@ SettingsChromeLayout make_settings_chrome_layout(double width, double height) no
 BasicPageLayout make_basic_page_layout(double width) noexcept {
     width = std::max(600.0, width);
     BasicPageLayout result{};
-    result.content_height = 532.0;
+    result.content_height = 542.0;
     result.card = {0.0, 0.0, width, result.content_height};
     result.circle_radio = {28.0, 42.0, 92.0, 32.0};
     result.rectangle_radio = {128.0, 42.0, 92.0, 32.0};
@@ -37,7 +37,7 @@ BasicPageLayout make_basic_page_layout(double width) noexcept {
         result.values[index] = {width - 142.0, y + 5.0, 114.0, 40.0};
     }
     for (std::size_t index = 0; index < result.switches.size(); ++index)
-        result.switches[index] = {width - 84.0, 374.0 + index * 40.0, 56.0, 26.0};
+        result.switches[index] = {width - 84.0, 374.0 + index * 34.0, 56.0, 26.0};
     return result;
 }
 

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-set(SMK_VERSION "2.0.2")
+set(SMK_VERSION "2.1.1")
 project(SuperMiddleKeyNative VERSION ${SMK_VERSION} LANGUAGES CXX RC)
 
 if(NOT WIN32)
@@ -74,6 +74,7 @@ add_library(super_middle_key_windows STATIC
     platform/windows/HotkeyCaptureHook.cpp
     platform/windows/HotkeyCodec.cpp
     platform/windows/ImageClipboardPayload.cpp
+    platform/windows/ManagedShortcutStore.cpp
     platform/windows/MouseHook.cpp
     platform/windows/SettingsStore.cpp
     platform/windows/ShortcutIconResolver.cpp

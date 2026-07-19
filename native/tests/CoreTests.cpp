@@ -42,7 +42,7 @@ void settings_tests() {
     settings.wheel.radius = 999;
     settings.clipboard.max_history_items = 99;
     smk::core::normalize_settings(settings);
-    expect(settings.settings_version == 3, "settings version normalizes to v3");
+    expect(settings.settings_version == 4, "settings version normalizes to v4");
     expect(settings.wheel.shape == L"circle", "unknown wheel shape falls back to circle");
     expect(settings.wheel.sector_count == 6 || settings.wheel.sector_count == 8, "circle sector count snaps to a tier");
     expect(settings.wheel.radius == 360, "wheel radius matches managed normalization range");
@@ -269,6 +269,24 @@ void paste_tests() {
         "matching text cannot skip a required HTML clipboard payload");
     expect(!smk::core::can_skip_clipboard_write(image, smk::core::PasteMode::formatted, image.plain_text),
         "matching fallback text cannot skip an image clipboard payload");
+    const auto cleaned = smk::core::clean_spreadsheet_plain_text(
+        L"  A\t“B”\r\n C　'D'\n\n中文，123");
+    expect(cleaned == L"AB\r\nCD\n\n中文，123",
+        "spreadsheet text cleaning removes horizontal space and quotes while preserving line endings and punctuation");
+    expect(smk::core::paste_plain_text(table, false) == table.plain_text,
+        "disabled spreadsheet text cleaning preserves the original text");
+    expect(smk::core::paste_plain_text(single, true) == single.plain_text,
+        "non-spreadsheet text is never cleaned by the spreadsheet option");
+    auto plain_table = entry(L"plain-table", L" A\t“B”");
+    plain_table.looks_like_spreadsheet = true;
+    const auto cleaned_table = smk::core::paste_plain_text(plain_table, true);
+    expect(cleaned_table == L"AB", "spreadsheet paste text uses the configured cleaner");
+    expect(!smk::core::can_skip_clipboard_write(
+        plain_table, smk::core::PasteMode::formatted, plain_table.plain_text, cleaned_table),
+        "clipboard skip comparison uses cleaned output instead of the original spreadsheet text");
+    expect(smk::core::can_skip_clipboard_write(
+        plain_table, smk::core::PasteMode::formatted, cleaned_table, cleaned_table),
+        "clipboard skip comparison accepts an existing cleaned plain-only spreadsheet payload");
 }
 
 } // namespace

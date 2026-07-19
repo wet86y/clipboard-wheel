@@ -156,6 +156,8 @@ void layout_contract_tests() {
             expect(inside(chrome.tab_bar, tab), "all three tabs remain inside the tab band");
 
         const auto basic = smk::ui::make_basic_page_layout(chrome.page_viewport.width);
+        expect(basic.switches.size() == 5 && basic.content_height >= 542.0,
+            "basic settings layout reserves a fifth switch row for spreadsheet text cleaning");
         expect(inside(basic.card, basic.circle_radio) && inside(basic.card, basic.rectangle_radio)
             && inside(basic.card, basic.sector_combo),
             "basic shape controls remain within their card");
@@ -597,6 +599,15 @@ int main() {
             SendMessageW(GetParent(quick_copy), WM_COMMAND, MAKEWPARAM(2016, BN_CLICKED), reinterpret_cast<LPARAM>(quick_copy)); pump();
             expect(SendMessageW(quick_copy, BM_GETCHECK, 0, 0) != before, "page command forwarding toggles owner-drawn switches");
         }
+        HWND clean_spreadsheet_text = child_with_id(window, 2020);
+        expect(clean_spreadsheet_text != nullptr,
+            "basic page exposes the spreadsheet text cleaning switch");
+        if (clean_spreadsheet_text) {
+            SendMessageW(clean_spreadsheet_text, BM_SETCHECK, BST_CHECKED, 0);
+            pump();
+            expect(SendMessageW(clean_spreadsheet_text, BM_GETCHECK, 0, 0) == BST_CHECKED,
+                "spreadsheet text cleaning switch accepts the enabled state");
+        }
         HWND circle_shape = child_with_id(window, 2010);
         HWND rectangle_shape = child_with_id(window, 2011);
         HWND sectors = child_with_id(window, 2012);
@@ -679,6 +690,9 @@ int main() {
         settings.show(model);
         validate_visible_control_pixels();
         pump();
+        expect(SendMessageW(clean_spreadsheet_text, BM_GETCHECK, 0, 0) == BST_UNCHECKED,
+            "reopening discards an unsaved spreadsheet text cleaning change");
+        SendMessageW(clean_spreadsheet_text, BM_SETCHECK, BST_CHECKED, 0);
         wchar_t restored_name[128]{};
         if (slot_name) GetWindowTextW(slot_name, restored_name, static_cast<int>(std::size(restored_name)));
         expect(std::wstring(restored_name) == model.wheel.extended_wheel.slots[0].name,
@@ -732,9 +746,13 @@ int main() {
                 SetWindowTextW(slot_name, name.c_str()); pump();
             }
         }
+        expect(SendMessageW(clean_spreadsheet_text, BM_GETCHECK, 0, 0) == BST_CHECKED,
+            "spreadsheet text cleaning switch remains enabled until save");
         SendMessageW(window, WM_COMMAND, MAKEWPARAM(2001, BN_CLICKED), 0); pump();
         expect(saved && !IsWindowVisible(window), "save applies the draft and closes");
         expect(saved_settings.wheel.radius == 250, "save applies the current radius slider value");
+        expect(saved_settings.clipboard.clean_spreadsheet_plain_text,
+            "save persists the spreadsheet text cleaning switch");
         expect(saved_settings.wheel.extended_wheel.slots[0].hotkey == L"Ctrl+Shift+F12",
             "ending a persistent recording commits the chord to the selected slot");
         for (int index = 0; index < smk::core::kExtendedSlotCount; ++index)

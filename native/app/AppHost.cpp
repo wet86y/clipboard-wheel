@@ -5,6 +5,7 @@
 #include "platform/windows/CrashHandler.h"
 #include "platform/windows/DiagnosticLog.h"
 #include "platform/windows/ElevationService.h"
+#include "platform/windows/ManagedShortcutStore.h"
 #include "platform/windows/StartupTrace.h"
 #include "platform/windows/ShortcutDropHelper.h"
 #include "updater/UpdatePolicy.h"
@@ -106,6 +107,7 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
     }
 
     settings_ = settings_store_.load();
+    smk::windows::ManagedShortcutStore{}.cleanup_unreferenced(settings_);
     SMK_STARTUP_TRACE(L"settings loaded");
     SMK_DIAGNOSTIC_EVENT("elevation.state", std::format(
         L"process_elevated={} setting_enabled={} admin_restart={}",
@@ -151,6 +153,7 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
     }
 
     clipboard_ = std::make_unique<smk::windows::ClipboardService>(history_, [] {}, settings_.clipboard.capture_images);
+    clipboard_->set_clean_spreadsheet_plain_text(settings_.clipboard.clean_spreadsheet_plain_text);
     if (!clipboard_->start(instance)) {
         SMK_STARTUP_TRACE(L"clipboard listener start failed");
         return false;
@@ -465,6 +468,7 @@ std::optional<smk::core::AppSettings> AppHost::save_settings(const smk::core::Ap
         if (enabled_) mouse_hook_->retry_now();
     }
     clipboard_->set_capture_images(settings_.clipboard.capture_images);
+    clipboard_->set_clean_spreadsheet_plain_text(settings_.clipboard.clean_spreadsheet_plain_text);
     if (updater_) updater_->set_acceleration(settings_.update.use_acceleration_nodes);
     tray_.set_enabled(enabled_);
     if (settings_.run_as_administrator_enabled != smk::windows::is_administrator()) {

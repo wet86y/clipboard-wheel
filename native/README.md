@@ -15,11 +15,11 @@
 ## 运行与兼容边界
 
 - 主程序使用 C++20、Win32、Direct2D/DirectWrite、WIC、OLE 和 C++/WinRT，不依赖 .NET 运行时。
-- 原生构建使用现有 `SettingsVersion = 3`、应用数据目录、互斥体和自启动标识。
+- 原生构建使用现有 `SettingsVersion = 4`、应用数据目录、互斥体和自启动标识。
 - `DesktopUpdateKit/native` 由根 CMake 直接引入，原生 Stub 以 RCDATA 嵌入单 EXE；`--verify-release`
   会离线验证资源、PE/x64 结构和区段边界。
 - Release 与 `RelWithDebInfo` 的“关于”页均开放检查、下载、暂停、后台继续、节点切换和安装；
   Release 固定使用正式仓库，诊断配置可切换到隔离测试仓库。
-- 默认版本集中由 CMake 的 `SMK_VERSION` 管理，当前正式原生目标为 `2.0.2`。诊断联网测试可用
+- 默认版本集中由 CMake 的 `SMK_VERSION` 管理，当前正式原生目标为 `2.1.1`。诊断联网测试可用
   `--update-test-repository owner/repo` 隔离缓存和更新通道，Release 会拒绝该参数。
 - 根目录 `scripts` 是正式构建、自检、资产准备和发布入口；`native/scripts` 只负责内部 CMake 构建与诊断。
