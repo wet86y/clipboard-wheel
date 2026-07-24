@@ -26,5 +26,8 @@
 ## 发布
 
 - [ ] Release 资产包含项目许可证、NOTICE、第三方声明和 DesktopUpdateKit MIT 文本。
-- [ ] 只有明确发布时运行 `.\scripts\publish-release.ps1 -Version <version>`。
+- [ ] 只有明确发布时运行 `.\scripts\publish-release.ps1 -Version <version> -Finalize`；上传完成后脚本自动执行轻量在线门禁。
+- [ ] 在线门禁核对 GitHub 资产名称、数量、大小、`uploaded` 状态和服务器端 SHA-256 digest，并读取公开的 `latest/update.json` 与 `.sha256`。
+- [ ] 默认不重新下载完整 EXE。仅在发布脚本或更新器变更、资产被覆盖、哈希/大小异常、重大版本或专项验收时执行完整回下载。
+- [ ] 在线资产门禁不替代 Native C++ DesktopUpdateKit、原生 Stub、CTest 和 `--verify-release`；不得引入或调用托管下载器。
 - [ ] GitHub Release 和源码推送分别核验；不得用本地旧资产冒充当前提交产物。

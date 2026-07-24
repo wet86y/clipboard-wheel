@@ -19,3 +19,6 @@ $ConfigPath = Join-Path $ProjectRoot "release.config.json"
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
+
+$VerifyScriptPath = Join-Path $PSScriptRoot "verify-online-release.ps1"
+& $VerifyScriptPath -Version $Version -RequireLatest:$Finalize

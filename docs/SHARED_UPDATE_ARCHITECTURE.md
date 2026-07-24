@@ -25,3 +25,7 @@
 - 正式资产同时携带双方许可证和第三方声明。
 - `update.json` 只描述版本、固定 Tag、资产、大小、SHA-256 与 HTTPS 节点。
 - 第三方节点只能改变传输路径，不能决定版本、资产或校验值；官方直连始终是强制兜底。
+
+宿主发布入口在上传资产后会调用 `scripts\verify-online-release.ps1`。默认校验 GitHub 资产元数据、大小、服务器端 SHA-256 digest，以及公开的 `update.json` 和 `.sha256`；不会重新下载完整 EXE。只有发布脚本或更新器发生变化、资产被覆盖、校验异常、重大版本或专项验收时，才增加完整 EXE 回下载。
+
+该脚本只负责上传后的宿主无关在线校验，不调用或替换更新器实现。超级中键继续使用 Native C++ DesktopUpdateKit、原生 Stub、CTest 和 `--verify-release`；轻量在线门禁不能替代这些原生发布门禁。
