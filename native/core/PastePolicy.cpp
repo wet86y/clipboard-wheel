@@ -19,6 +19,11 @@ bool is_removed_quote(wchar_t value) noexcept {
         || value == 0x201C || value == 0x201D || value == 0xFF02 || value == 0xFF07;
 }
 
+bool is_line_break(wchar_t value) noexcept {
+    // 覆盖 Windows / Unix / 旧 Mac 换行，以及 Unicode 换行和段落分隔符。
+    return value == L'\r' || value == L'\n' || value == 0x0085 || value == 0x2028 || value == 0x2029;
+}
+
 } // namespace
 
 PasteMode resolve_paste_mode(const ClipboardEntry& entry, PasteMode requested) noexcept {
@@ -52,19 +57,23 @@ bool can_skip_clipboard_write(
     return !expected.empty() && current_unicode_text == expected;
 }
 
-std::wstring clean_spreadsheet_plain_text(std::wstring_view text) {
+std::wstring clean_spreadsheet_plain_text(std::wstring_view text, bool remove_line_breaks) {
     std::wstring result;
     result.reserve(text.size());
     for (const wchar_t value : text) {
-        if (!is_removed_horizontal_space(value) && !is_removed_quote(value)) result.push_back(value);
+        if (!is_removed_horizontal_space(value) && !is_removed_quote(value)
+            && !(remove_line_breaks && is_line_break(value))) result.push_back(value);
     }
-    return result;
+    const auto first = result.find_first_not_of(L"\r\n\u0085\u2028\u2029");
+    if (first == std::wstring::npos) return {};
+    const auto last = result.find_last_not_of(L"\r\n\u0085\u2028\u2029");
+    return result.substr(first, last - first + 1);
 }
 
-std::wstring paste_plain_text(const ClipboardEntry& entry, bool clean_spreadsheet_text) {
+std::wstring paste_plain_text(const ClipboardEntry& entry, bool clean_spreadsheet_text, bool remove_line_breaks) {
     const auto& source = entry.plain_text.empty() ? entry.display_text : entry.plain_text;
     return clean_spreadsheet_text && entry.looks_like_spreadsheet
-        ? clean_spreadsheet_plain_text(source)
+        ? clean_spreadsheet_plain_text(source, remove_line_breaks)
         : source;
 }
 

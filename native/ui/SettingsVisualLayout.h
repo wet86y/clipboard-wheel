@@ -31,13 +31,23 @@ struct SettingsChromeLayout {
 };
 
 struct BasicPageLayout {
-    UiRect card{};
+    UiRect card{}; // 轮盘外观卡片。
+    UiRect clipboard_card{}; // 剪贴板功能卡片。
+    UiRect startup_card{}; // 启动与权限卡片。
     UiRect circle_radio{};
     UiRect rectangle_radio{};
     UiRect sector_combo{};
     std::array<UiRect, 3> sliders{};
     std::array<UiRect, 3> values{};
+    std::array<UiRect, 5> rows{}; // 设置行，绘制与控件共用定位基准。
+    std::array<UiRect, 5> icons{}; // 行图标区域。
+    std::array<UiRect, 5> titles{}; // 设置名称区域。
+    std::array<UiRect, 5> descriptions{}; // 辅助说明区域。
     std::array<UiRect, 5> switches{};
+    UiRect line_break_row{}; // 依附表格清洗的紧凑子选项行。
+    UiRect line_break_title{}; // 换行清洗名称。
+    UiRect line_break_description{}; // 拼接行为说明。
+    UiRect line_break_switch{}; // 小尺寸换行清洗开关。
     double content_height = 0.0;
 };
 

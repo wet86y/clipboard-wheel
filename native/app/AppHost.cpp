@@ -153,7 +153,8 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
     }
 
     clipboard_ = std::make_unique<smk::windows::ClipboardService>(history_, [] {}, settings_.clipboard.capture_images);
-    clipboard_->set_clean_spreadsheet_plain_text(settings_.clipboard.clean_spreadsheet_plain_text);
+    clipboard_->set_clean_spreadsheet_plain_text(settings_.clipboard.clean_spreadsheet_plain_text,
+        settings_.clipboard.clean_spreadsheet_line_breaks);
     if (!clipboard_->start(instance)) {
         SMK_STARTUP_TRACE(L"clipboard listener start failed");
         return false;
@@ -468,7 +469,8 @@ std::optional<smk::core::AppSettings> AppHost::save_settings(const smk::core::Ap
         if (enabled_) mouse_hook_->retry_now();
     }
     clipboard_->set_capture_images(settings_.clipboard.capture_images);
-    clipboard_->set_clean_spreadsheet_plain_text(settings_.clipboard.clean_spreadsheet_plain_text);
+    clipboard_->set_clean_spreadsheet_plain_text(settings_.clipboard.clean_spreadsheet_plain_text,
+        settings_.clipboard.clean_spreadsheet_line_breaks);
     if (updater_) updater_->set_acceleration(settings_.update.use_acceleration_nodes);
     tray_.set_enabled(enabled_);
     if (settings_.run_as_administrator_enabled != smk::windows::is_administrator()) {

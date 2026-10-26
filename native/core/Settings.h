@@ -61,7 +61,8 @@ struct MouseSettings {
 struct ClipboardSettings {
     int max_history_items = 8;
     bool capture_images = false;
-    bool clean_spreadsheet_plain_text = false;
+    bool clean_spreadsheet_plain_text = false; // 表格纯文本清洗：删除空白和引号。
+    bool clean_spreadsheet_line_breaks = false; // 换行清洗子选项：将表格纯文本拼接为一段。
 };
 
 struct UpdateSettings {

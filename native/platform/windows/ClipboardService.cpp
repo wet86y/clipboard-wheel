@@ -331,7 +331,8 @@ bool ClipboardService::paste_entry(const smk::core::ClipboardEntry& entry, smk::
     }
     pending_entry_ = entry;
     pending_mode_ = smk::core::resolve_paste_mode(entry, requested);
-    pending_plain_text_ = smk::core::paste_plain_text(entry, clean_spreadsheet_plain_text_);
+    pending_plain_text_ = smk::core::paste_plain_text(
+        entry, clean_spreadsheet_plain_text_, clean_spreadsheet_line_breaks_);
     pending_started_ = GetTickCount64();
     suppress_capture_until_ = pending_started_ + kRetryTimeoutMs + 250;
     capture_coalescer_.cancel();

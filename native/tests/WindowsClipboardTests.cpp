@@ -355,7 +355,7 @@ int main() {
     const auto cleaned_text = smk::core::clean_spreadsheet_plain_text(L" 中文\t“text”\r\n");
     auto cleaned_data = smk::windows::create_clipboard_data_object(
         rich_text, smk::core::PasteMode::formatted, cleaned_text);
-    expect(read_unicode_text(cleaned_data.Get()) == L"中文text\r\n",
+    expect(read_unicode_text(cleaned_data.Get()) == L"中文text",
         "formatted spreadsheet payload exposes cleaned Unicode text to edit-mode targets");
     expect(read_encoded_text(cleaned_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"HTML Format")))
             == "<b>中文 text</b>"
@@ -364,6 +364,16 @@ int main() {
         && read_encoded_text(cleaned_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Csv")))
             == "a,b",
         "spreadsheet text cleaning leaves HTML, RTF, and CSV payloads unchanged");
+    rich_text.plain_text = L"\r\n“第一 行”\r\n第二行\r\n";
+    auto joined_data = smk::windows::create_clipboard_data_object(rich_text, smk::core::PasteMode::formatted,
+        smk::core::paste_plain_text(rich_text, true, true));
+    expect(read_unicode_text(joined_data.Get()) == L"第一行第二行"
+        && read_encoded_text(joined_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"HTML Format")))
+            == "<b>中文 text</b>"
+        && read_encoded_text(joined_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Rich Text Format")))
+            == "{\\rtf1 text}"
+        && read_encoded_text(joined_data.Get(), static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"Csv"))) == "a,b",
+        "换行清洗只替换纯文本载荷，保留表格富文本和单元格结构");
 
     smk::windows::ClipboardCaptureRetryState capture_retry;
     const auto first_generation = capture_retry.begin();

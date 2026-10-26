@@ -57,6 +57,8 @@ void normalize_settings(AppSettings& settings) noexcept {
     settings.wheel.extended_wheel.breakout_buffer_pixels =
         std::clamp(settings.wheel.extended_wheel.breakout_buffer_pixels, 0.0, 80.0);
     settings.clipboard.max_history_items = 8;
+    if (!settings.clipboard.clean_spreadsheet_plain_text)
+        settings.clipboard.clean_spreadsheet_line_breaks = false;
 
     initialize_slot_indices(settings);
 }

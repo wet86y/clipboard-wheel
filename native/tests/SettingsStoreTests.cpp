@@ -85,6 +85,9 @@ void legacy_upgrade_test(const std::filesystem::path& root) {
         "converted settings use canonical lower camel case");
     expect(converted.find("\"cleanSpreadsheetPlainText\":false") != std::string::npos,
         "version 4 migration writes the default-off spreadsheet text cleaner");
+    expect(!settings.clipboard.clean_spreadsheet_line_breaks
+        && converted.find("\"cleanSpreadsheetLineBreaks\":false") != std::string::npos,
+        "旧配置缺少换行清洗字段时，升级后保持默认关闭");
     expect(converted.find("\"defaultCaptureMode\"") == std::string::npos
         && converted.find("\"paste\"") == std::string::npos
         && converted.find("\"processRules\"") == std::string::npos,
@@ -114,6 +117,24 @@ void future_version_test(const std::filesystem::path& root) {
     expect(read_bytes(current / L"settings.json") == json, "future settings files are not overwritten");
 }
 
+void text_cleaning_roundtrip_test(const std::filesystem::path& root) {
+    smk::windows::SettingsStore store(root / L"text-cleaning");
+    smk::core::AppSettings settings;
+    settings.clipboard.clean_spreadsheet_plain_text = true;
+    settings.clipboard.clean_spreadsheet_line_breaks = true;
+    std::wstring error;
+    expect(store.save(settings, error), "保存父子清洗开关成功");
+    const auto loaded = store.load();
+    expect(loaded.clipboard.clean_spreadsheet_plain_text && loaded.clipboard.clean_spreadsheet_line_breaks,
+        "父子清洗开关保存后可同时读回");
+    settings.clipboard.clean_spreadsheet_plain_text = false;
+    expect(store.save(settings, error) && !store.load().clipboard.clean_spreadsheet_line_breaks,
+        "保存父关子开的不一致配置时会关闭子选项");
+    write_bytes(root / L"text-cleaning" / L"settings.json",
+        R"({"settingsVersion":4,"clipboard":{"cleanSpreadsheetPlainText":false,"cleanSpreadsheetLineBreaks":true}})");
+    expect(!store.load().clipboard.clean_spreadsheet_line_breaks, "加载外部编辑的父关子开配置时也会关闭子选项");
+}
+
 void failed_write_test(const std::filesystem::path& root) {
     const auto blocker = root / L"blocker";
     write_bytes(blocker, "not-a-directory");
@@ -132,6 +153,7 @@ int main() {
     legacy_upgrade_test(root);
     native_pascal_case_test(root);
     future_version_test(root);
+    text_cleaning_roundtrip_test(root);
     failed_write_test(root);
     std::error_code ignored;
     if (!failures) std::filesystem::remove_all(root, ignored);

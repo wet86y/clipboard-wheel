@@ -164,6 +164,39 @@ void layout_contract_tests() {
         for (std::size_t index = 0; index < basic.sliders.size(); ++index)
             expect(inside(basic.card, basic.sliders[index]) && inside(basic.card, basic.values[index]),
                 "basic slider and value panels remain within their card");
+        expect(basic.clipboard_card.y >= basic.card.bottom() + 16.0
+            && basic.startup_card.y >= basic.clipboard_card.bottom() + 16.0
+            && basic.content_height >= basic.startup_card.bottom(),
+            "基础设置的三个分组保留间距，滚动范围包含最后一个分组");
+        for (std::size_t index = 0; index < basic.rows.size(); ++index) {
+            const auto& row = basic.rows[index];
+            const auto& icon = basic.icons[index];
+            const auto& toggle = basic.switches[index];
+            expect(inside(index < 3 ? basic.clipboard_card : basic.startup_card, row)
+                && inside(row, icon) && inside(row, toggle)
+                && inside(row, basic.titles[index]) && inside(row, basic.descriptions[index]),
+                "设置行的图标、名称、说明和开关均位于所属卡片内");
+            expect(std::abs(icon.y + icon.height / 2.0 - (toggle.y + toggle.height / 2.0)) < 0.01
+                && std::abs(row.y + row.height / 2.0 - (toggle.y + toggle.height / 2.0)) < 0.01,
+                "每行图标和开关共享同一条垂直中心线");
+            expect(basic.descriptions[index].right() + 20.0 <= toggle.x
+                && !overlaps(basic.titles[index], basic.descriptions[index]),
+                "名称、说明与开关保持独立空间");
+            if (index > 0)
+                expect(!overlaps(row, basic.rows[index - 1]), "相邻设置行不会重叠");
+        }
+        expect(inside(basic.clipboard_card, basic.line_break_row)
+            && inside(basic.line_break_row, basic.line_break_title)
+            && inside(basic.line_break_row, basic.line_break_description)
+            && inside(basic.line_break_row, basic.line_break_switch)
+            && basic.line_break_row.y == basic.rows[2].bottom()
+            && basic.line_break_row.x > basic.rows[2].x
+            && basic.line_break_row.height < basic.rows[2].height,
+            "换行清洗紧贴父设置下方，缩进显示且行高更小");
+        expect(basic.line_break_switch.height < basic.switches[2].height
+            && basic.line_break_switch.right() == basic.switches[2].right()
+            && !overlaps(basic.line_break_description, basic.line_break_switch),
+            "子开关更小并与父开关右边缘对齐，说明不会覆盖开关");
 
         const auto wheel = smk::ui::make_wheel_page_layout(
             chrome.page_viewport.width, chrome.page_viewport.height);
@@ -247,7 +280,15 @@ int main() {
         smk::core::AppSettings model;
         model.wheel.extended_wheel.slots[0].name = L"测试槽位";
         settings.show(model);
-        HWND window = FindWindowW(L"SuperMiddleKeyNativeSettings", nullptr);
+        // 只定位当前测试线程创建的窗口，避免已运行的正式程序干扰检查。
+        HWND window = nullptr;
+        EnumThreadWindows(GetCurrentThreadId(), [](HWND candidate, LPARAM context) -> BOOL {
+            wchar_t class_name[64]{};
+            GetClassNameW(candidate, class_name, static_cast<int>(std::size(class_name)));
+            if (wcscmp(class_name, L"SuperMiddleKeyNativeSettings") != 0) return TRUE;
+            *reinterpret_cast<HWND*>(context) = candidate;
+            return FALSE;
+        }, reinterpret_cast<LPARAM>(&window));
         expect(window && IsWindowVisible(window), "settings window becomes visible");
         const auto validate_visible_control_pixels = [&] {
             for (const auto [id, message] : std::array{
@@ -255,7 +296,6 @@ int main() {
                 std::pair{2011, "rectangle radio is painted before any interaction"},
                 std::pair{2012, "sector combo is painted before any interaction"},
                 std::pair{2016, "quick-copy switch is painted before any interaction"},
-                std::pair{2019, "administrator switch is painted before any interaction"},
             }) {
                 expect(client_has_drawn_pixels(child_with_id(window, id)), message);
             }
@@ -361,6 +401,21 @@ int main() {
         validate_current_footer();
         ShowWindow(window, SW_RESTORE); pump();
         validate_footer(960, 720);
+        // 验证下方分组滚动后真正可见，避免将移出视口的控件误判成绘制失败。
+        SendMessageW(basic_page, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(-20 * WHEEL_DELTA)), 0);
+        pump();
+        RECT basic_viewport{};
+        GetClientRect(basic_page, &basic_viewport);
+        for (const int id : {2016, 2017, 2020, 2021, 2018, 2019}) {
+            const HWND toggle = child_with_id(window, id);
+            RECT bounds{};
+            GetWindowRect(toggle, &bounds);
+            MapWindowPoints(nullptr, basic_page, reinterpret_cast<POINT*>(&bounds), 2);
+            expect(bounds.top >= 0 && bounds.bottom <= basic_viewport.bottom
+                && client_has_drawn_pixels(toggle), "滚动后基础开关与换行子开关完整显示并正确绘制");
+        }
+        SendMessageW(basic_page, WM_MOUSEWHEEL, MAKEWPARAM(0, static_cast<WORD>(20 * WHEEL_DELTA)), 0);
+        pump();
         HWND tab = FindWindowExW(window, nullptr, WC_TABCONTROLW, nullptr);
         expect(tab && TabCtrl_GetItemCount(tab) == 3, "settings window exposes three tabs");
         const auto activate_tab = [&](int selected) {
@@ -600,6 +655,10 @@ int main() {
             expect(SendMessageW(quick_copy, BM_GETCHECK, 0, 0) != before, "page command forwarding toggles owner-drawn switches");
         }
         HWND clean_spreadsheet_text = child_with_id(window, 2020);
+        HWND clean_line_breaks = child_with_id(window, 2021);
+        expect(clean_line_breaks && !IsWindowEnabled(clean_line_breaks)
+            && SendMessageW(clean_line_breaks, BM_GETCHECK, 0, 0) == BST_UNCHECKED,
+            "父清洗默认关闭时，换行子选项未选中且禁用");
         expect(clean_spreadsheet_text != nullptr,
             "basic page exposes the spreadsheet text cleaning switch");
         if (clean_spreadsheet_text) {
@@ -607,6 +666,27 @@ int main() {
             pump();
             expect(SendMessageW(clean_spreadsheet_text, BM_GETCHECK, 0, 0) == BST_CHECKED,
                 "spreadsheet text cleaning switch accepts the enabled state");
+            expect(IsWindowEnabled(clean_line_breaks), "开启父清洗后，换行子选项可操作");
+            const auto click_cleaner = [&](HWND control) {
+                SendMessageW(GetParent(control), WM_COMMAND,
+                    MAKEWPARAM(GetDlgCtrlID(control), BN_CLICKED), reinterpret_cast<LPARAM>(control));
+                pump();
+            };
+            click_cleaner(clean_line_breaks);
+            expect(SendMessageW(clean_line_breaks, BM_GETCHECK, 0, 0) == BST_CHECKED,
+                "换行清洗子开关可独立开启");
+            click_cleaner(clean_spreadsheet_text);
+            expect(!IsWindowEnabled(clean_line_breaks)
+                && SendMessageW(clean_line_breaks, BM_GETCHECK, 0, 0) == BST_UNCHECKED,
+                "关闭父清洗会立即取消子选项并禁用");
+            click_cleaner(clean_line_breaks);
+            expect(SendMessageW(clean_line_breaks, BM_GETCHECK, 0, 0) == BST_UNCHECKED,
+                "禁用状态下的子开关通知不会重新开启清洗");
+            click_cleaner(clean_spreadsheet_text);
+            expect(IsWindowEnabled(clean_line_breaks)
+                && SendMessageW(clean_line_breaks, BM_GETCHECK, 0, 0) == BST_UNCHECKED,
+                "重新开启父清洗不会自动恢复子选项");
+            click_cleaner(clean_line_breaks);
         }
         HWND circle_shape = child_with_id(window, 2010);
         HWND rectangle_shape = child_with_id(window, 2011);
@@ -692,7 +772,10 @@ int main() {
         pump();
         expect(SendMessageW(clean_spreadsheet_text, BM_GETCHECK, 0, 0) == BST_UNCHECKED,
             "reopening discards an unsaved spreadsheet text cleaning change");
+        expect(SendMessageW(clean_line_breaks, BM_GETCHECK, 0, 0) == BST_UNCHECKED
+            && !IsWindowEnabled(clean_line_breaks), "重新打开设置会丢弃未保存的换行清洗草稿");
         SendMessageW(clean_spreadsheet_text, BM_SETCHECK, BST_CHECKED, 0);
+        SendMessageW(clean_line_breaks, BM_SETCHECK, BST_CHECKED, 0);
         wchar_t restored_name[128]{};
         if (slot_name) GetWindowTextW(slot_name, restored_name, static_cast<int>(std::size(restored_name)));
         expect(std::wstring(restored_name) == model.wheel.extended_wheel.slots[0].name,
@@ -753,6 +836,7 @@ int main() {
         expect(saved_settings.wheel.radius == 250, "save applies the current radius slider value");
         expect(saved_settings.clipboard.clean_spreadsheet_plain_text,
             "save persists the spreadsheet text cleaning switch");
+        expect(saved_settings.clipboard.clean_spreadsheet_line_breaks, "保存时同时持久化换行清洗子选项");
         expect(saved_settings.wheel.extended_wheel.slots[0].hotkey == L"Ctrl+Shift+F12",
             "ending a persistent recording commits the chord to the selected slot");
         for (int index = 0; index < smk::core::kExtendedSlotCount; ++index)
@@ -762,6 +846,9 @@ int main() {
         const auto persisted = saved_settings;
         allow_save = false;
         settings.show(persisted); pump();
+        expect(IsWindowEnabled(clean_line_breaks)
+            && SendMessageW(clean_line_breaks, BM_GETCHECK, 0, 0) == BST_CHECKED,
+            "重新打开已保存配置时恢复父子清洗开关");
         HWND administrator = child_with_id(window, 2019);
         const auto previous_admin = SendMessageW(administrator, BM_GETCHECK, 0, 0);
         SendMessageW(GetParent(administrator), WM_COMMAND,

@@ -85,8 +85,9 @@ public:
     bool start(HINSTANCE instance);
     void stop();
     void set_capture_images(bool enabled) noexcept { capture_images_ = enabled; }
-    void set_clean_spreadsheet_plain_text(bool enabled) noexcept {
+    void set_clean_spreadsheet_plain_text(bool enabled, bool remove_line_breaks = false) noexcept {
         clean_spreadsheet_plain_text_ = enabled;
+        clean_spreadsheet_line_breaks_ = enabled && remove_line_breaks;
     }
     bool capture_current();
     bool paste_entry(const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode);
@@ -114,6 +115,7 @@ private:
     ChangedCallback changed_;
     bool capture_images_ = false;
     bool clean_spreadsheet_plain_text_ = false;
+    bool clean_spreadsheet_line_breaks_ = false; // 换行清洗，仅在父清洗开关开启时生效。
     std::optional<smk::core::ClipboardEntry> pending_entry_;
     smk::core::PasteMode pending_mode_ = smk::core::PasteMode::smart;
     std::wstring pending_plain_text_;

@@ -49,6 +49,10 @@
     "_capture_doc": "文本/富文本固定全量捕获：纯文本、HTML/表格、RTF、CSV/TSV 都保留。",
     "captureImages": false,
     "_captureImages_doc": "默认=false。打开后实时捕获剪贴板图片，轮盘里显示缩略图；启动 Win+V 导入暂不读取历史图片。",
+    "cleanSpreadsheetPlainText": false,
+    "_cleanSpreadsheetPlainText_doc": "表格文本清洗，默认关闭。纯文本载荷删除横向空白、引号与首尾空行，默认保留正文内部换行，不改变表格富文本格式。",
+    "cleanSpreadsheetLineBreaks": false,
+    "_cleanSpreadsheetLineBreaks_doc": "换行清洗，默认关闭。仅在表格文本清洗开启时可用；启用后删除正文内部换行并拼接成一段，关闭父选项时同步关闭。",
     "ignorePasswordLikeText": false,
     "_ignorePasswordLikeText_doc": "固定=false。本地小工具诚实记录剪切板内容，不再猜测过滤密码/token。"
   },

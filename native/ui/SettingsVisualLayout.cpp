@@ -26,18 +26,32 @@ SettingsChromeLayout make_settings_chrome_layout(double width, double height) no
 BasicPageLayout make_basic_page_layout(double width) noexcept {
     width = std::max(600.0, width);
     BasicPageLayout result{};
-    result.content_height = 542.0;
-    result.card = {0.0, 0.0, width, result.content_height};
-    result.circle_radio = {28.0, 42.0, 92.0, 32.0};
-    result.rectangle_radio = {128.0, 42.0, 92.0, 32.0};
-    result.sector_combo = {28.0, 116.0, 220.0, 40.0};
+    result.card = {0.0, 0.0, width, 338.0};
+    result.clipboard_card = {0.0, 354.0, width, 294.0};
+    result.startup_card = {0.0, result.clipboard_card.bottom() + 16.0, width, 182.0};
+    result.content_height = result.startup_card.bottom() + 16.0;
+    result.circle_radio = {28.0, 84.0, 92.0, 32.0};
+    result.rectangle_radio = {128.0, 84.0, 92.0, 32.0};
+    result.sector_combo = {width - 248.0, 80.0, 220.0, 40.0};
     for (std::size_t index = 0; index < result.sliders.size(); ++index) {
-        const double y = 178.0 + index * 62.0;
-        result.sliders[index] = {154.0, y + 7.0, std::max(210.0, width - 326.0), 36.0};
-        result.values[index] = {width - 142.0, y + 5.0, 114.0, 40.0};
+        const double y = 170.0 + index * 52.0;
+        result.sliders[index] = {154.0, y + 2.0, std::max(210.0, width - 326.0), 36.0};
+        result.values[index] = {width - 142.0, y, 114.0, 40.0};
     }
-    for (std::size_t index = 0; index < result.switches.size(); ++index)
-        result.switches[index] = {width - 84.0, 374.0 + index * 34.0, 56.0, 26.0};
+    for (std::size_t index = 0; index < result.switches.size(); ++index) {
+        const double y = index < 3 ? result.clipboard_card.y + 44.0 + index * 64.0
+            : result.startup_card.y + 44.0 + (index - 3) * 64.0;
+        result.rows[index] = {20.0, y, width - 40.0, 64.0};
+        result.icons[index] = {28.0, y + 21.0, 22.0, 22.0};
+        result.titles[index] = {68.0, y + 8.0, width - 180.0, 24.0};
+        result.descriptions[index] = {68.0, y + 32.0, width - 180.0, 24.0};
+        result.switches[index] = {width - 84.0, y + 19.0, 56.0, 26.0};
+    }
+    const double child_y = result.rows[2].bottom();
+    result.line_break_row = {68.0, child_y, width - 96.0, 44.0};
+    result.line_break_title = {84.0, child_y + 10.0, 84.0, 24.0};
+    result.line_break_description = {176.0, child_y + 10.0, width - 280.0, 24.0};
+    result.line_break_switch = {width - 72.0, child_y + 11.0, 44.0, 22.0};
     return result;
 }
 

@@ -242,6 +242,8 @@ smk::core::AppSettings SettingsStore::load() {
         settings.clipboard.capture_images = bool_value(clipboard, L"CaptureImages", settings.clipboard.capture_images);
         settings.clipboard.clean_spreadsheet_plain_text = bool_value(
             clipboard, L"CleanSpreadsheetPlainText", settings.clipboard.clean_spreadsheet_plain_text);
+        settings.clipboard.clean_spreadsheet_line_breaks = bool_value(
+            clipboard, L"CleanSpreadsheetLineBreaks", settings.clipboard.clean_spreadsheet_line_breaks);
         const auto mouse = object_or_empty(root, L"Mouse");
         settings.mouse.middle_button_capture_enabled = bool_value(mouse, L"MiddleButtonCaptureEnabled", settings.mouse.middle_button_capture_enabled);
         const auto update = object_or_empty(root, L"Update");
@@ -352,6 +354,7 @@ bool SettingsStore::save(const smk::core::AppSettings& input, std::wstring& erro
         set(clipboard, L"MaxHistoryItems", settings.clipboard.max_history_items);
         set(clipboard, L"CaptureImages", settings.clipboard.capture_images);
         set(clipboard, L"CleanSpreadsheetPlainText", settings.clipboard.clean_spreadsheet_plain_text);
+        set(clipboard, L"CleanSpreadsheetLineBreaks", settings.clipboard.clean_spreadsheet_line_breaks);
         set_object(root, L"Clipboard", clipboard);
 
         JsonObject mouse;

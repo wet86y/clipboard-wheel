@@ -47,6 +47,13 @@ void settings_tests() {
     expect(settings.wheel.sector_count == 6 || settings.wheel.sector_count == 8, "circle sector count snaps to a tier");
     expect(settings.wheel.radius == 360, "wheel radius matches managed normalization range");
     expect(settings.clipboard.max_history_items == 8, "history count remains fixed at eight");
+    settings.clipboard.clean_spreadsheet_line_breaks = true;
+    smk::core::normalize_settings(settings);
+    expect(!settings.clipboard.clean_spreadsheet_line_breaks, "父清洗关闭时，配置归一化会关闭换行清洗");
+    settings.clipboard.clean_spreadsheet_plain_text = true;
+    settings.clipboard.clean_spreadsheet_line_breaks = true;
+    smk::core::normalize_settings(settings);
+    expect(settings.clipboard.clean_spreadsheet_line_breaks, "父清洗开启时保留换行清洗选项");
     for (int index = 0; index < smk::core::kExtendedSlotCount; ++index) {
         expect(settings.wheel.extended_wheel.slots[static_cast<std::size_t>(index)].slot_index == index, "slot indexes normalize");
     }
@@ -273,6 +280,14 @@ void paste_tests() {
         L"  A\t“B”\r\n C　'D'\n\n中文，123");
     expect(cleaned == L"AB\r\nCD\n\n中文，123",
         "spreadsheet text cleaning removes horizontal space and quotes while preserving line endings and punctuation");
+    expect(smk::core::clean_spreadsheet_plain_text(L"\r\n \t\u3000\u00a0\uFEFF“首 句”\r\n\r\n'尾句' \t\u3000\r\n\n")
+        == L"首句\r\n\r\n尾句", "清洗覆盖首尾空白、引号与空行，并保留正文内部空行");
+    expect(smk::core::clean_spreadsheet_plain_text(L"\r\n \t\u2028\u2029“”\r\n").empty(),
+        "只有空白、引号与换行的内容清洗后为空");
+    expect(smk::core::clean_spreadsheet_plain_text(L"").empty(), "空文本清洗安全返回空文本");
+    expect(smk::core::clean_spreadsheet_plain_text(
+        L"\r\n“第一 句。”\r\n\r第二\n句！\u0085第三\u2028句？\u2029结束。\r\n", true)
+        == L"第一句。第二句！第三句？结束。", "换行清洗覆盖不同换行符，直接拼接且保留正文标点");
     expect(smk::core::paste_plain_text(table, false) == table.plain_text,
         "disabled spreadsheet text cleaning preserves the original text");
     expect(smk::core::paste_plain_text(single, true) == single.plain_text,
@@ -287,6 +302,20 @@ void paste_tests() {
     expect(smk::core::can_skip_clipboard_write(
         plain_table, smk::core::PasteMode::formatted, cleaned_table, cleaned_table),
         "clipboard skip comparison accepts an existing cleaned plain-only spreadsheet payload");
+    plain_table.plain_text = L"\r\n“第一 行”\r\n第二行\r\n";
+    expect(smk::core::paste_plain_text(plain_table, true, false) == L"第一行\r\n第二行"
+        && smk::core::paste_plain_text(plain_table, true, true) == L"第一行第二行",
+        "换行子选项只在开启时移除正文内部换行");
+    expect(smk::core::paste_plain_text(plain_table, false, true) == plain_table.plain_text,
+        "即使传入开启的子选项，父清洗关闭也保持原文");
+    plain_table.looks_like_spreadsheet = false;
+    expect(smk::core::paste_plain_text(plain_table, true, true) == plain_table.plain_text,
+        "换行清洗沿用父选项的表格范围，普通文本保持原文");
+    plain_table.looks_like_spreadsheet = true;
+    plain_table.display_text = plain_table.plain_text;
+    plain_table.plain_text.clear();
+    expect(smk::core::paste_plain_text(plain_table, true, true) == L"第一行第二行",
+        "只有显示文本的表格条目也使用相同换行清洗策略");
 }
 
 } // namespace

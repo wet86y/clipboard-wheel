@@ -81,6 +81,7 @@ private:
     void refresh_sector_items(bool reset_to_default);
     void update_value_labels();
     void set_switch_value(HWND toggle, bool checked);
+    void update_text_cleaning_controls(); // 同步清洗父子开关的选中、可用状态。
     void animate_switch(HWND toggle);
     void advance_switch_animations();
     void draw_owner_control(const DRAWITEMSTRUCT& item);
@@ -159,6 +160,7 @@ private:
     HWND quick_copy_ = nullptr;
     HWND capture_images_ = nullptr;
     HWND clean_spreadsheet_text_ = nullptr;
+    HWND clean_line_breaks_ = nullptr; // 换行清洗子开关。
     HWND auto_start_ = nullptr;
     HWND administrator_ = nullptr;
     HWND admin_status_ = nullptr;
@@ -209,7 +211,7 @@ private:
         ULONGLONG started_at = 0;
         bool active = false;
     };
-    std::array<SwitchAnimation, 7> switch_animations_{};
+    std::array<SwitchAnimation, 8> switch_animations_{};
     smk::core::AppSettings settings_{};
     smk::core::AppSettings committed_settings_{};
     smk::core::ExtendedWheelVisualLayout preview_visual_layout_{};

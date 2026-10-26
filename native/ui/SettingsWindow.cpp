@@ -21,6 +21,7 @@
 #include <cmath>
 #include <filesystem>
 #include <format>
+#include <initializer_list>
 #include <memory>
 #include <numeric>
 #include <tuple>
@@ -37,6 +38,7 @@ constexpr int kShapeCircle = 2010, kShapeRectangle = 2011, kSectors = 2012;
 constexpr int kRadius = 2013, kDeadZone = 2014, kOpacity = 2015;
 constexpr int kQuickCopy = 2016, kCaptureImages = 2017, kAutoStart = 2018, kAdministrator = 2019;
 constexpr int kCleanSpreadsheetText = 2020;
+constexpr int kCleanLineBreaks = 2021; // 换行清洗子选项控件编号。
 constexpr int kExtended = 2030, kBreakout = 2031, kPreview = 2032, kSlotMode = 2033;
 constexpr int kSlotName = 2034, kSlotAction = 2035, kSlotBehavior = 2036, kBrowserUrl = 2037;
 constexpr int kSlotValue = 2038, kRepositoryLink = 2040;
@@ -237,54 +239,86 @@ bool is_browser_shortcut(const std::wstring& path) {
     return false;
 }
 
-enum class IconKind { link, image, power, user, refresh, repository, info };
+// 图标语义：复制、图片、清洗、启动、权限、开发者、代码仓库、版本、下载。
+enum class IconKind { copy, image, clean, launch, shield, developer, repository, info, download };
 
 void draw_line_icon(ID2D1RenderTarget* target, IconKind kind, const UiRect& box, ID2D1Brush* brush) {
     if (!target || !brush) return;
-    const float left = static_cast<float>(box.x), top = static_cast<float>(box.y);
-    const float right = static_cast<float>(box.right()), bottom = static_cast<float>(box.bottom());
-    const float cx = (left + right) * 0.5f, cy = (top + bottom) * 0.5f;
-    const float w = right - left, h = bottom - top;
-    const float stroke = std::max(1.2f, std::min(w, h) * 0.075f);
+    // 使用统一的 24 单位矢量网格，所有尺寸随逻辑像素和系统缩放同步变化。
+    const auto point = [&box](float x, float y) {
+        return D2D1::Point2F(static_cast<float>(box.x + x * box.width / 24.0),
+            static_cast<float>(box.y + y * box.height / 24.0));
+    };
+    const float stroke = static_cast<float>(std::min(box.width, box.height) / 24.0 * 1.7);
+    const auto line = [&](float x1, float y1, float x2, float y2) {
+        target->DrawLine(point(x1, y1), point(x2, y2), brush, stroke);
+    };
+    const auto outline = [&](float x1, float y1, float x2, float y2, float radius) {
+        const auto a = point(x1, y1), b = point(x2, y2);
+        const float r = static_cast<float>(radius * box.width / 24.0);
+        target->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(a.x, a.y, b.x, b.y), r, r), brush, stroke);
+    };
+    const auto circle = [&](float x, float y, float radius, bool filled = false) {
+        const auto ellipse = D2D1::Ellipse(point(x, y), static_cast<float>(radius * box.width / 24.0),
+            static_cast<float>(radius * box.height / 24.0));
+        if (filled) target->FillEllipse(ellipse, brush);
+        else target->DrawEllipse(ellipse, brush, stroke);
+    };
+    const auto path = [&](std::initializer_list<D2D1_POINT_2F> points, bool closed = false) {
+        Microsoft::WRL::ComPtr<ID2D1Factory> factory;
+        Microsoft::WRL::ComPtr<ID2D1PathGeometry> geometry;
+        Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+        target->GetFactory(factory.GetAddressOf());
+        if (FAILED(factory->CreatePathGeometry(geometry.GetAddressOf()))
+            || FAILED(geometry->Open(sink.GetAddressOf()))) return;
+        auto iterator = points.begin();
+        sink->BeginFigure(*iterator++, D2D1_FIGURE_BEGIN_HOLLOW);
+        for (; iterator != points.end(); ++iterator) sink->AddLine(*iterator);
+        sink->EndFigure(closed ? D2D1_FIGURE_END_CLOSED : D2D1_FIGURE_END_OPEN);
+        if (SUCCEEDED(sink->Close())) target->DrawGeometry(geometry.Get(), brush, stroke);
+    };
     switch (kind) {
-    case IconKind::link:
-        target->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left + w * .08f, top + h * .28f,
-            left + w * .58f, top + h * .72f), 4, 4), brush, stroke);
-        target->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left + w * .42f, top + h * .18f,
-            left + w * .92f, top + h * .62f), 4, 4), brush, stroke);
-        target->DrawLine(D2D1::Point2F(left + w * .38f, cy), D2D1::Point2F(left + w * .66f, cy), brush, stroke);
+    case IconKind::copy:
+        outline(8, 8, 21, 21, 2);
+        path({point(5, 16), point(3, 16), point(3, 3), point(16, 3), point(16, 5)});
         break;
     case IconKind::image:
-        target->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left + 2, top + 2, right - 2, bottom - 2), 3, 3), brush, stroke);
-        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(left + w * .72f, top + h * .30f), w * .07f, h * .07f), brush, stroke);
-        target->DrawLine(D2D1::Point2F(left + w * .12f, bottom - h * .18f), D2D1::Point2F(left + w * .40f, top + h * .48f), brush, stroke);
-        target->DrawLine(D2D1::Point2F(left + w * .40f, top + h * .48f), D2D1::Point2F(left + w * .60f, bottom - h * .28f), brush, stroke);
-        target->DrawLine(D2D1::Point2F(left + w * .60f, bottom - h * .28f), D2D1::Point2F(right - w * .10f, bottom - h * .12f), brush, stroke);
+        outline(3, 3, 21, 21, 2);
+        circle(16, 8, 1.5f);
+        path({point(3, 17), point(9, 11), point(15, 17), point(18, 14), point(21, 17)});
         break;
-    case IconKind::power:
-        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy + h * .06f), w * .35f, h * .35f), brush, stroke);
-        target->DrawLine(D2D1::Point2F(cx, top + h * .04f), D2D1::Point2F(cx, cy), brush, stroke * 1.15f);
+    case IconKind::clean:
+        line(4, 5, 15, 5); line(9.5f, 5, 9.5f, 15); line(6, 15, 11, 15);
+        path({point(12, 17), point(18, 11), point(22, 15), point(16, 21)}, true);
+        line(16, 13, 20, 17); line(12, 21, 22, 21);
         break;
-    case IconKind::user:
-        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, top + h * .32f), w * .16f, h * .16f), brush, stroke);
-        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, bottom - h * .22f), w * .34f, h * .23f), brush, stroke);
+    case IconKind::launch:
+        outline(3, 3, 21, 21, 2); line(3, 8, 21, 8);
+        line(12, 18, 12, 11); line(8, 15, 12, 11); line(12, 11, 16, 15);
         break;
-    case IconKind::refresh:
-        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), w * .34f, h * .34f), brush, stroke);
-        target->DrawLine(D2D1::Point2F(right - w * .12f, top + h * .32f), D2D1::Point2F(right - w * .12f, top + h * .08f), brush, stroke);
-        target->DrawLine(D2D1::Point2F(right - w * .12f, top + h * .08f), D2D1::Point2F(right - w * .34f, top + h * .14f), brush, stroke);
+    case IconKind::shield:
+        path({point(12, 2), point(20, 5), point(20, 12), point(18, 17), point(12, 22),
+            point(6, 17), point(4, 12), point(4, 5)}, true);
+        path({point(8, 12), point(11, 15), point(16, 9)});
+        break;
+    case IconKind::developer:
+        path({point(7, 5), point(2, 12), point(7, 19)});
+        path({point(17, 5), point(22, 12), point(17, 19)});
+        line(14, 3, 10, 21);
         break;
     case IconKind::repository:
-        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), w * .38f, h * .38f), brush, stroke);
-        target->DrawLine(D2D1::Point2F(cx - w * .12f, top + h * .26f), D2D1::Point2F(cx - w * .12f, bottom - h * .24f), brush, stroke);
-        target->DrawLine(D2D1::Point2F(cx - w * .12f, cy), D2D1::Point2F(cx + w * .18f, top + h * .38f), brush, stroke);
-        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx - w * .12f, top + h * .25f), 2.2f, 2.2f), brush, stroke);
-        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx + w * .18f, top + h * .38f), 2.2f, 2.2f), brush, stroke);
+        circle(6, 5, 2); circle(6, 19, 2); circle(18, 5, 2);
+        line(6, 7, 6, 17);
+        path({point(18, 7), point(18, 10), point(6, 15)});
         break;
     case IconKind::info:
-        target->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), w * .36f, h * .36f), brush, stroke);
-        target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, top + h * .30f), 1.8f, 1.8f), brush);
-        target->DrawLine(D2D1::Point2F(cx, top + h * .44f), D2D1::Point2F(cx, bottom - h * .24f), brush, stroke);
+        circle(12, 12, 9); circle(12, 7.5f, 1, true);
+        line(12, 11, 12, 17); line(10, 17, 14, 17);
+        break;
+    case IconKind::download:
+        line(12, 2, 12, 15);
+        path({point(7, 10), point(12, 15), point(17, 10)});
+        path({point(3, 15), point(3, 21), point(21, 21), point(21, 15)});
         break;
     }
 }
@@ -767,8 +801,9 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
             InvalidateRect(pages_[0], nullptr, FALSE); InvalidateRect(preview_, nullptr, FALSE); return 0;
         }
         if (id == kSectors && notification == CBN_SELCHANGE) { InvalidateRect(preview_, nullptr, FALSE); return 0; }
-        if (id == kQuickCopy || id == kCaptureImages || id == kCleanSpreadsheetText
+        if (id == kQuickCopy || id == kCaptureImages || id == kCleanSpreadsheetText || id == kCleanLineBreaks
             || id == kAutoStart || id == kAdministrator || id == kExtended) {
+            if (id == kCleanLineBreaks && !IsWindowEnabled(clean_line_breaks_)) return 0;
             animate_switch(reinterpret_cast<HWND>(lparam));
             if (id == kAdministrator) SetWindowTextW(admin_status_, L"保存后应用此模式");
             InvalidateRect(pages_[id == kExtended ? 1 : 0], nullptr, FALSE);
@@ -953,7 +988,7 @@ void SettingsWindow::create_controls() {
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(3000 + index)), instance_, this);
     }
     create_basic_page(); create_wheel_page(); create_about_page();
-    switch_animations_ = {{{quick_copy_}, {capture_images_}, {clean_spreadsheet_text_},
+    switch_animations_ = {{{quick_copy_}, {capture_images_}, {clean_spreadsheet_text_}, {clean_line_breaks_},
         {auto_start_}, {administrator_}, {extended_enabled_}, {about_acceleration_}}};
     for (std::size_t index = 0; index < switch_animations_.size(); ++index)
         SetWindowSubclass(switch_animations_[index].control, switch_subclass_proc, index + 1, reinterpret_cast<DWORD_PTR>(this));
@@ -994,13 +1029,15 @@ void SettingsWindow::create_basic_page() {
     radius_value_ = make_label(instance_, page, L"", 0, SS_OWNERDRAW);
     dead_zone_value_ = make_label(instance_, page, L"", 0, SS_OWNERDRAW);
     opacity_value_ = make_label(instance_, page, L"", 0, SS_OWNERDRAW);
-    quick_copy_ = make_control(instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kQuickCopy);
-    capture_images_ = make_control(instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kCaptureImages);
+    quick_copy_ = make_control(instance_, page, L"BUTTON", L"快捷复制", BS_OWNERDRAW | WS_TABSTOP, kQuickCopy);
+    capture_images_ = make_control(instance_, page, L"BUTTON", L"捕获图片", BS_OWNERDRAW | WS_TABSTOP, kCaptureImages);
     clean_spreadsheet_text_ = make_control(
-        instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kCleanSpreadsheetText);
-    auto_start_ = make_control(instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kAutoStart);
-    administrator_ = make_control(instance_, page, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP, kAdministrator);
-    admin_status_ = make_label(instance_, page, L"");
+        instance_, page, L"BUTTON", L"表格文本清洗", BS_OWNERDRAW | WS_TABSTOP, kCleanSpreadsheetText);
+    clean_line_breaks_ = make_control(
+        instance_, page, L"BUTTON", L"换行清洗", BS_OWNERDRAW | WS_TABSTOP, kCleanLineBreaks);
+    auto_start_ = make_control(instance_, page, L"BUTTON", L"开机自启动", BS_OWNERDRAW | WS_TABSTOP, kAutoStart);
+    administrator_ = make_control(instance_, page, L"BUTTON", L"管理员模式运行", BS_OWNERDRAW | WS_TABSTOP, kAdministrator);
+    admin_status_ = make_label(instance_, page, L"", 0, SS_OWNERDRAW);
 }
 
 void SettingsWindow::create_wheel_page() {
@@ -1118,7 +1155,8 @@ void SettingsWindow::reposition_page_controls(int index) {
         for (std::size_t i = 0; i < 3; ++i) { move_control(sliders[i], value.sliders[i], dpi_, scroll); move_control(labels[i], value.values[i], dpi_, scroll); }
         const HWND switches[]{quick_copy_, capture_images_, clean_spreadsheet_text_, auto_start_, administrator_};
         for (std::size_t i = 0; i < 5; ++i) move_control(switches[i], value.switches[i], dpi_, scroll);
-        move_control(admin_status_, {320.0, 509.0, value.card.width - 430.0, 26.0}, dpi_, scroll);
+        move_control(clean_line_breaks_, value.line_break_switch, dpi_, scroll);
+        move_control(admin_status_, value.descriptions.back(), dpi_, scroll);
     } else if (index == 1) {
         const auto value = make_wheel_page_layout(chrome_.page_viewport.width, chrome_.page_viewport.height);
         move_control(extended_enabled_, value.extended_switch, dpi_, scroll);
@@ -1223,15 +1261,17 @@ void SettingsWindow::load_controls() {
     Button_SetCheck(capture_images_, settings_.clipboard.capture_images ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(clean_spreadsheet_text_,
         settings_.clipboard.clean_spreadsheet_plain_text ? BST_CHECKED : BST_UNCHECKED);
+    Button_SetCheck(clean_line_breaks_,
+        settings_.clipboard.clean_spreadsheet_line_breaks ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(auto_start_, settings_.auto_start_enabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(administrator_, settings_.run_as_administrator_enabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(extended_enabled_, settings_.wheel.extended_wheel.enabled ? BST_CHECKED : BST_UNCHECKED);
     Button_SetCheck(about_acceleration_, settings_.update.use_acceleration_nodes ? BST_CHECKED : BST_UNCHECKED);
     SendMessageW(breakout_, TBM_SETPOS, TRUE, static_cast<LPARAM>(settings_.wheel.extended_wheel.breakout_buffer_pixels));
-    SetWindowTextW(admin_status_, L"");
+    SetWindowTextW(admin_status_, L"保存后应用，权限变更时会重新启动程序");
     loading_ = false;
     load_slot(0); update_value_labels();
-    for (auto control : {quick_copy_, capture_images_, clean_spreadsheet_text_, auto_start_,
+    for (auto control : {quick_copy_, capture_images_, clean_spreadsheet_text_, clean_line_breaks_, auto_start_,
             administrator_, extended_enabled_, about_acceleration_})
         set_switch_value(control, Button_GetCheck(control) == BST_CHECKED);
     InvalidateRect(preview_, nullptr, FALSE);
@@ -1249,6 +1289,8 @@ void SettingsWindow::save_controls() {
     settings_.clipboard.capture_images = Button_GetCheck(capture_images_) == BST_CHECKED;
     settings_.clipboard.clean_spreadsheet_plain_text =
         Button_GetCheck(clean_spreadsheet_text_) == BST_CHECKED;
+    settings_.clipboard.clean_spreadsheet_line_breaks =
+        Button_GetCheck(clean_line_breaks_) == BST_CHECKED;
     settings_.auto_start_enabled = Button_GetCheck(auto_start_) == BST_CHECKED;
     settings_.run_as_administrator_enabled = Button_GetCheck(administrator_) == BST_CHECKED;
     settings_.wheel.extended_wheel.enabled = Button_GetCheck(extended_enabled_) == BST_CHECKED;
@@ -1315,11 +1357,22 @@ void SettingsWindow::update_value_labels() {
 }
 
 void SettingsWindow::set_switch_value(HWND toggle, bool checked) {
+    if (toggle == clean_line_breaks_ && Button_GetCheck(clean_spreadsheet_text_) != BST_CHECKED)
+        checked = false;
     const auto found = std::find_if(switch_animations_.begin(), switch_animations_.end(),
         [toggle](const SwitchAnimation& value) { return value.control == toggle; });
     if (found == switch_animations_.end()) return;
     found->value = found->from = found->to = checked ? 1.0 : 0.0;
     found->active = false; InvalidateRect(toggle, nullptr, FALSE);
+    if (toggle == clean_spreadsheet_text_) update_text_cleaning_controls();
+}
+
+void SettingsWindow::update_text_cleaning_controls() {
+    if (!clean_line_breaks_) return;
+    const bool enabled = Button_GetCheck(clean_spreadsheet_text_) == BST_CHECKED;
+    if (!enabled) set_switch_value(clean_line_breaks_, false);
+    EnableWindow(clean_line_breaks_, enabled);
+    InvalidateRect(pages_[0], nullptr, FALSE);
 }
 
 void SettingsWindow::animate_switch(HWND toggle) {
@@ -1328,6 +1381,7 @@ void SettingsWindow::animate_switch(HWND toggle) {
     if (found == switch_animations_.end()) return;
     found->from = found->value; found->to = found->to >= 0.5 ? 0.0 : 1.0;
     found->started_at = GetTickCount64(); found->active = true;
+    if (toggle == clean_spreadsheet_text_) update_text_cleaning_controls();
     SetTimer(window_, kSwitchAnimationTimer, kSwitchAnimationFrameMs, nullptr);
     InvalidateRect(toggle, nullptr, FALSE);
 }
@@ -1368,13 +1422,18 @@ void SettingsWindow::draw_switch(const DRAWITEMSTRUCT& item) {
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> track;
     target->CreateSolidColorBrush(D2D1::ColorF(lerp(0xB8, 0x0B) / 255.0f,
         lerp(0x4A, 0x64) / 255.0f, lerp(0x5A, 0xF6) / 255.0f), track.GetAddressOf());
-    target->Clear(color(kCard));
+    const bool enabled = IsWindowEnabled(item.hwndItem) != FALSE;
+    if (!enabled) track->SetColor(color(kDisabled));
+    target->Clear(color(item.hwndItem == clean_line_breaks_ ? kControl : kCard));
     target->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(0, 0, static_cast<float>(width), static_cast<float>(height)),
         static_cast<float>(height / 2.0), static_cast<float>(height / 2.0)), track.Get());
     const float diameter = static_cast<float>(height - 4.0);
     const float left = static_cast<float>(2.0 + (width - height) * position);
     target->FillEllipse(D2D1::Ellipse(D2D1::Point2F(left + diameter / 2.0f, static_cast<float>(height / 2.0)),
-        diameter / 2.0f, diameter / 2.0f), text_brush_.Get());
+        diameter / 2.0f, diameter / 2.0f), enabled ? text_brush_.Get() : secondary_text_brush_.Get());
+    if ((item.itemState & ODS_FOCUS) != 0 && (item.itemState & ODS_NOFOCUSRECT) == 0)
+        target->DrawRoundedRectangle(rounded({1.0, 1.0, width - 2.0, height - 2.0},
+            static_cast<float>((height - 2.0) / 2.0)), glow_brush_.Get(), 1.0f);
     end_dc_draw();
 }
 
@@ -1506,6 +1565,12 @@ void SettingsWindow::draw_value_panel(const DRAWITEMSTRUCT& item) {
     const double width = (item.rcItem.right - item.rcItem.left) / scale;
     const double height = (item.rcItem.bottom - item.rcItem.top) / scale;
     target->Clear(color(kCard));
+    if (item.hwndItem == admin_status_) {
+        draw_text(target, small_format_.Get(), secondary_text_brush_.Get(),
+            window_text(item.hwndItem), {0, 0, width, height});
+        end_dc_draw();
+        return;
+    }
     const UiRect bounds{0.5, 0.5, width - 1.0, height - 1.0};
     target->FillRoundedRectangle(rounded(bounds, 7), control_brush_.Get());
     ID2D1Brush* outline = border_brush_.Get();
@@ -1800,36 +1865,50 @@ void SettingsWindow::paint_page(HWND page, int page_index) {
 }
 
 void SettingsWindow::paint_basic_page(ID2D1RenderTarget* target, const BasicPageLayout& layout, double scroll) {
-    target->FillRoundedRectangle(rounded(layout.card, 8, scroll), card_brush_.Get());
-    target->DrawRoundedRectangle(rounded(layout.card, 8, scroll), border_brush_.Get(), 1.0f);
-    for (double y : {96.0, 164.0, 360.0})
-        target->DrawLine(D2D1::Point2F(0, static_cast<float>(y - scroll)),
-            D2D1::Point2F(static_cast<float>(layout.card.width), static_cast<float>(y - scroll)), border_brush_.Get(), 1.0f);
-    draw_text(target, section_format_.Get(), text_brush_.Get(), L"布局形状", shifted({28, 10, 240, 30}, scroll));
+    for (const auto& card : {layout.card, layout.clipboard_card, layout.startup_card}) {
+        target->FillRoundedRectangle(rounded(card, 8, scroll), card_brush_.Get());
+        target->DrawRoundedRectangle(rounded(card, 8, scroll), border_brush_.Get(), 1.0f);
+    }
+    draw_text(target, section_format_.Get(), text_brush_.Get(), L"轮盘外观", shifted({28, 14, 240, 30}, scroll));
+    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), L"布局形状", shifted({28, 52, 220, 24}, scroll));
+    draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), L"扇区数量",
+        shifted({layout.sector_combo.x, 52, 220, 24}, scroll));
     draw_text(target, small_format_.Get(), secondary_text_brush_.Get(),
-        L"圆形 4/6/8（默认6），矩形 4/8（默认8），矩形8区为九宫格镂空中心",
-        shifted({28, 70, layout.card.width - 56, 24}, scroll));
-    draw_text(target, body_format_.Get(), text_brush_.Get(), L"扇区数量（等级制）", shifted({28, 96, 260, 24}, scroll));
+        L"圆形支持 4 / 6 / 8 区；矩形支持 4 / 8 区，8 区时中心留空。",
+        shifted({28, 126, layout.card.width - 56, 24}, scroll));
     const wchar_t* slider_labels[]{L"轮盘大小", L"中心死区半径", L"透明度"};
     for (std::size_t index = 0; index < 3; ++index)
         draw_text(target, body_format_.Get(), text_brush_.Get(), slider_labels[index],
-            shifted({28, 178.0 + index * 62.0, 118, 42}, scroll));
-    const wchar_t* toggle_texts[]{
-        L"快捷复制：最后一个扇区执行 Ctrl+C",
-        L"捕获图片：复制图片后在轮盘中显示缩略图",
-        L"表格文本清洗：以文本方式粘贴时去除空格和引号",
-        L"开机自启动：登录 Windows 后自动运行",
-        L"管理员模式运行",
+            shifted({28, layout.values[index].y, 118, 40}, scroll));
+    draw_text(target, section_format_.Get(), text_brush_.Get(), L"剪贴板功能",
+        shifted({28, layout.clipboard_card.y + 10, 240, 30}, scroll));
+    draw_text(target, section_format_.Get(), text_brush_.Get(), L"启动与权限",
+        shifted({28, layout.startup_card.y + 10, 240, 30}, scroll));
+    const wchar_t* titles[]{L"快捷复制", L"捕获图片", L"表格文本清洗", L"开机自启动", L"管理员模式运行"};
+    const wchar_t* descriptions[]{
+        L"最后一个扇区执行 Ctrl+C，快速复制当前选中内容",
+        L"复制图片后，将图片缩略图加入轮盘历史",
+        L"以纯文本粘贴时去除空格、引号与首尾空行",
+        L"登录 Windows 后自动运行超级中键",
     };
-    const IconKind icons[]{IconKind::link, IconKind::image, IconKind::refresh, IconKind::power, IconKind::user};
+    const IconKind icons[]{IconKind::copy, IconKind::image, IconKind::clean, IconKind::launch, IconKind::shield};
     for (std::size_t index = 0; index < 5; ++index) {
-        const double y = 366.0 + index * 34.0 - scroll;
-        if (index > 0) target->DrawLine(D2D1::Point2F(20, static_cast<float>(y - 5)),
-            D2D1::Point2F(static_cast<float>(layout.card.width - 20), static_cast<float>(y - 5)), border_brush_.Get(), 0.7f);
-        target->DrawRoundedRectangle(rounded({24, y + 1, 32, 32}, 7), border_brush_.Get(), 1.0f);
-        draw_line_icon(target, icons[index], {31, y + 8, 18, 18}, index >= 3 ? red_brush_.Get() : glow_brush_.Get());
-        draw_text(target, body_format_.Get(), text_brush_.Get(), toggle_texts[index], {68, y, layout.card.width - 174, 34});
+        const auto& row = layout.rows[index];
+        if (index != 0 && index != 3)
+            target->DrawLine(D2D1::Point2F(68, static_cast<float>(row.y - scroll)),
+                D2D1::Point2F(static_cast<float>(row.right() - 8), static_cast<float>(row.y - scroll)), border_brush_.Get(), 0.7f);
+        draw_line_icon(target, icons[index], shifted(layout.icons[index], scroll), glow_brush_.Get());
+        draw_text(target, body_format_.Get(), text_brush_.Get(), titles[index], shifted(layout.titles[index], scroll));
+        if (index < std::size(descriptions))
+            draw_text(target, small_format_.Get(), secondary_text_brush_.Get(), descriptions[index],
+                shifted(layout.descriptions[index], scroll));
     }
+    const bool cleaning_enabled = Button_GetCheck(clean_spreadsheet_text_) == BST_CHECKED;
+    target->FillRoundedRectangle(rounded(layout.line_break_row, 6, scroll), control_brush_.Get());
+    draw_text(target, small_format_.Get(), cleaning_enabled ? text_brush_.Get() : secondary_text_brush_.Get(),
+        L"换行清洗", shifted(layout.line_break_title, scroll));
+    draw_text(target, small_format_.Get(), cleaning_enabled ? secondary_text_brush_.Get() : disabled_brush_.Get(),
+        L"移除换行，将文本拼接成一段", shifted(layout.line_break_description, scroll));
 }
 
 void SettingsWindow::paint_wheel_page(ID2D1RenderTarget* target, const WheelPageLayout& layout, double scroll) {
@@ -1869,7 +1948,7 @@ void SettingsWindow::paint_wheel_page(ID2D1RenderTarget* target, const WheelPage
 void SettingsWindow::paint_about_page(ID2D1RenderTarget* target, const AboutPageLayout& layout, double scroll) {
     target->FillRoundedRectangle(rounded(layout.update_card, 8, scroll), card_brush_.Get());
     target->DrawRoundedRectangle(rounded(layout.update_card, 8, scroll), border_brush_.Get(), 1.0f);
-    draw_line_icon(target, IconKind::refresh, shifted({28, 18, 24, 24}, scroll), glow_brush_.Get());
+    draw_line_icon(target, IconKind::download, shifted({28, 18, 24, 24}, scroll), glow_brush_.Get());
     draw_text(target, section_format_.Get(), text_brush_.Get(), L"更新与下载",
         shifted({62, 8, 240, 44}, scroll));
     if (!update_state_.version.empty()) {
@@ -1961,11 +2040,11 @@ void SettingsWindow::paint_about_page(ID2D1RenderTarget* target, const AboutPage
     target->DrawLine(D2D1::Point2F(28, static_cast<float>(product_y + 94 - scroll)),
         D2D1::Point2F(static_cast<float>(layout.product_card.width - 28), static_cast<float>(product_y + 94 - scroll)),
         border_brush_.Get(), 1.0f);
-    draw_line_icon(target, IconKind::user, shifted({32, product_y + 106, 22, 22}, scroll), glow_brush_.Get());
+    draw_line_icon(target, IconKind::developer, shifted({32, product_y + 106, 22, 22}, scroll), glow_brush_.Get());
     draw_text(target, body_format_.Get(), text_brush_.Get(), L"开发者", shifted({68, product_y + 96, 104, 42}, scroll));
     draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), L"wet86y", shifted({184, product_y + 96, 240, 42}, scroll));
     draw_line_icon(target, IconKind::repository, shifted({32, product_y + 150, 22, 22}, scroll), glow_brush_.Get());
-    draw_text(target, body_format_.Get(), text_brush_.Get(), L"GitHub 历史", shifted({68, product_y + 138, 110, 46}, scroll));
+    draw_text(target, body_format_.Get(), text_brush_.Get(), L"项目仓库", shifted({68, product_y + 138, 110, 46}, scroll));
     draw_line_icon(target, IconKind::info, shifted({32, product_y + 194, 22, 22}, scroll), glow_brush_.Get());
     draw_text(target, body_format_.Get(), text_brush_.Get(), L"当前版本", shifted({68, product_y + 182, 110, 46}, scroll));
     draw_text(target, body_format_.Get(), secondary_text_brush_.Get(), version_text_, shifted({184, product_y + 182, 420, 46}, scroll));
