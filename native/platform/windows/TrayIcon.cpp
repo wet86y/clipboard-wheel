@@ -14,6 +14,8 @@ constexpr UINT kToggle = 1001;
 constexpr UINT kSettings = 1002;
 constexpr UINT kClearHistory = 1003;
 constexpr UINT kExit = 1004;
+constexpr UINT_PTR kMaintenanceTimer = 1;
+constexpr UINT kMaintenanceMs = 2000;
 
 HICON build_wheel_icon(Gdiplus::Color fill, Gdiplus::Color center) {
     Gdiplus::Bitmap bitmap(32, 32, PixelFormat32bppARGB);
@@ -39,7 +41,11 @@ bool TrayIcon::create(HINSTANCE instance, Callbacks callbacks) {
     wc.lpfnWndProc = window_proc;
     wc.lpszClassName = kClassName;
     RegisterClassExW(&wc);
-    window_ = CreateWindowExW(0, kClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, this);
+    // 必须使用隐藏顶层窗口；HWND_MESSAGE（仅消息窗口）收不到任务栏重建广播。
+    taskbar_created_message_ = RegisterWindowMessageW(L"TaskbarCreated");
+    if (!taskbar_created_message_) return false;
+    window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"", WS_POPUP,
+        0, 0, 0, 0, nullptr, nullptr, instance, this);
     if (!window_) return false;
     Gdiplus::GdiplusStartupInput startup_input;
     if (Gdiplus::GdiplusStartup(&gdiplus_token_, &startup_input, nullptr) == Gdiplus::Ok) {
@@ -58,15 +64,17 @@ bool TrayIcon::create(HINSTANCE instance, Callbacks callbacks) {
     icon_.uCallbackMessage = kCallbackMessage;
     icon_.hIcon = enabled_icon_;
     wcscpy_s(icon_.szTip, L"超级中键");
-    if (!Shell_NotifyIconW(NIM_ADD, &icon_)) return false;
-    icon_.uVersion = NOTIFYICON_VERSION_4;
-    Shell_NotifyIconW(NIM_SETVERSION, &icon_);
+    if (!enabled_icon_) return false;
+    // 自启时 Explorer（资源管理器）可能尚未就绪，保留窗口并后台重试注册。
+    if (!SetTimer(window_, kMaintenanceTimer, kMaintenanceMs, nullptr)) return false;
+    refresh_icon();
     return true;
 }
 
 void TrayIcon::destroy() {
     if (window_) {
-        Shell_NotifyIconW(NIM_DELETE, &icon_);
+        KillTimer(window_, kMaintenanceTimer);
+        (void)send_icon_message(NIM_DELETE);
         DestroyWindow(window_);
         window_ = nullptr;
     }
@@ -75,30 +83,49 @@ void TrayIcon::destroy() {
     enabled_icon_ = disabled_icon_ = nullptr;
     if (gdiplus_token_) Gdiplus::GdiplusShutdown(gdiplus_token_);
     gdiplus_token_ = 0;
+    registered_ = false;
 }
 
 void TrayIcon::set_enabled(bool enabled) {
     enabled_ = enabled;
-    icon_.hIcon = enabled && capture_available_ ? enabled_icon_ : disabled_icon_;
-    wcscpy_s(icon_.szTip, !enabled ? L"超级中键（已暂停）"
-        : capture_available_ ? L"超级中键" : L"超级中键（中键捕获暂不可用）");
-    Shell_NotifyIconW(NIM_MODIFY, &icon_);
+    refresh_icon();
 }
 
 void TrayIcon::set_capture_available(bool available, bool notify) {
     capture_available_ = available;
+    refresh_icon(notify);
+}
+
+bool TrayIcon::send_icon_message(DWORD message) {
+    return notify_icon_ ? notify_icon_(message, &icon_) : Shell_NotifyIconW(message, &icon_) != FALSE;
+}
+
+void TrayIcon::refresh_icon(bool notify) {
     if (!window_) return;
-    icon_.uFlags = NIF_ICON | NIF_TIP;
-    icon_.hIcon = enabled_ && available ? enabled_icon_ : disabled_icon_;
+    icon_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    icon_.hIcon = enabled_ && capture_available_ ? enabled_icon_ : disabled_icon_;
     wcscpy_s(icon_.szTip, !enabled_ ? L"超级中键（已暂停）"
-        : available ? L"超级中键" : L"超级中键（中键捕获暂不可用）");
+        : capture_available_ ? L"超级中键" : L"超级中键（中键捕获暂不可用）");
     if (notify) {
         icon_.uFlags |= NIF_INFO;
         wcscpy_s(icon_.szInfoTitle, L"超级中键");
         wcscpy_s(icon_.szInfo, L"中键捕获暂不可用，程序将在后台自动重试。其他功能不受影响。");
         icon_.dwInfoFlags = NIIF_WARNING;
     }
-    Shell_NotifyIconW(NIM_MODIFY, &icon_);
+    if (registered_ && send_icon_message(NIM_MODIFY)) {
+        icon_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+        return;
+    }
+    registered_ = send_icon_message(NIM_ADD);
+    // 某些任务栏重建通知也可能保留现有条目；修改成功同样视为已恢复。
+    if (!registered_) registered_ = send_icon_message(NIM_MODIFY);
+    if (registered_) {
+        icon_.uVersion = NOTIFYICON_VERSION_4;
+        [[maybe_unused]] const bool version_set = send_icon_message(NIM_SETVERSION);
+        SMK_DIAGNOSTIC_EVENT("tray.icon.registered", std::format(L"version_set={}", version_set));
+    } else {
+        SMK_DIAGNOSTIC_EVENT("tray.icon.retry", L"registered=false retry_ms=2000");
+    }
     icon_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
 }
 
@@ -114,6 +141,15 @@ LRESULT CALLBACK TrayIcon::window_proc(HWND window, UINT message, WPARAM wparam,
 }
 
 LRESULT TrayIcon::handle_message(UINT message, WPARAM wparam, LPARAM lparam) {
+    if (taskbar_created_message_ && message == taskbar_created_message_) {
+        registered_ = false;
+        refresh_icon();
+        return 0;
+    }
+    if (message == WM_TIMER && wparam == kMaintenanceTimer) {
+        refresh_icon();
+        return 0;
+    }
     if (message == kCallbackMessage) {
         if (LOWORD(lparam) == WM_LBUTTONUP && callbacks_.toggle) callbacks_.toggle();
         if (LOWORD(lparam) == WM_RBUTTONUP || LOWORD(lparam) == WM_CONTEXTMENU) show_menu();

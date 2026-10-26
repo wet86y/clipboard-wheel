@@ -12,6 +12,7 @@
 #include <cwctype>
 #include <memory>
 #include <format>
+#include <utility>
 #include <vector>
 
 namespace smk::windows {
@@ -99,27 +100,9 @@ std::wstring read_stream_text(IStream* stream, bool unicode, UINT code_page) {
     return decode_text_bytes(bytes.data(), bytes.size(), unicode, code_page);
 }
 
-bool send_ctrl_v() {
-    INPUT inputs[4]{};
-    inputs[0].type = INPUT_KEYBOARD;
-    inputs[0].ki.wVk = VK_CONTROL;
-    inputs[1].type = INPUT_KEYBOARD;
-    inputs[1].ki.wVk = 'V';
-    inputs[2] = inputs[1];
-    inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
-    inputs[3] = inputs[0];
-    inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
-    const UINT sent = SendInput(4, inputs, sizeof(INPUT));
-    if (sent == 4) return true;
-    INPUT releases[2]{};
-    releases[0].type = INPUT_KEYBOARD;
-    releases[0].ki.wVk = 'V';
-    releases[0].ki.dwFlags = KEYEVENTF_KEYUP;
-    releases[1].type = INPUT_KEYBOARD;
-    releases[1].ki.wVk = VK_CONTROL;
-    releases[1].ki.dwFlags = KEYEVENTF_KEYUP;
-    (void)SendInput(2, releases, sizeof(INPUT));
-    return false;
+bool send_ctrl_v(InputGeneration generation) {
+    constexpr std::array<WORD, 2> keys{VK_CONTROL, 'V'};
+    return keyboard_input().send_chord(keys, generation);
 }
 
 } // namespace
@@ -182,6 +165,8 @@ LRESULT CALLBACK ClipboardService::window_proc(HWND window, UINT message, WPARAM
 }
 
 LRESULT ClipboardService::handle_message(UINT message, WPARAM wparam, LPARAM lparam) {
+    if ((pending_entry_ || paste_target_ || clipboard_replaced_)
+        && !keyboard_input().accepts(pending_input_generation_)) cancel_pending_paste();
     if (message == WM_CLIPBOARDUPDATE) {
         KillTimer(window_, kCaptureTimer);
         KillTimer(window_, kCaptureRetryTimer);
@@ -206,9 +191,11 @@ LRESULT ClipboardService::handle_message(UINT message, WPARAM wparam, LPARAM lpa
     if (message == WM_TIMER && wparam == kRetryTimer) { (void)attempt_pending_paste(); return 0; }
     if (message == WM_TIMER && wparam == kSendPasteTimer) {
         KillTimer(window_, kSendPasteTimer);
-        if (!paste_target_ || !IsWindow(paste_target_) || GetForegroundWindow() != paste_target_) {
+        if (!keyboard_input().accepts(pending_input_generation_)) {
+            fail_pending_paste(L"input_cancelled", ERROR_CANCELLED);
+        } else if (!paste_target_ || !IsWindow(paste_target_) || GetForegroundWindow() != paste_target_) {
             fail_pending_paste(L"target_changed", ERROR_INVALID_WINDOW_HANDLE);
-        } else if (!send_ctrl_v()) {
+        } else if (!send_ctrl_v(pending_input_generation_)) {
             fail_pending_paste(L"send_input", GetLastError());
         } else {
             original_clipboard_.Reset();
@@ -321,8 +308,9 @@ void ClipboardService::schedule_capture_retry() {
     SetTimer(window_, kCaptureRetryTimer, kCaptureRetryIntervalMs, nullptr);
 }
 
-bool ClipboardService::paste_entry(const smk::core::ClipboardEntry& entry, smk::core::PasteMode requested) {
-    if (!window_) return false;
+bool ClipboardService::paste_entry(const smk::core::ClipboardEntry& entry, smk::core::PasteMode requested,
+    InputGeneration generation) {
+    if (!window_ || !keyboard_input().accepts(generation)) return false;
     if (pending_entry_ || clipboard_replaced_) fail_pending_paste(L"superseded");
     const HWND target = GetForegroundWindow();
     if (!target || !IsWindow(target)) {
@@ -330,6 +318,7 @@ bool ClipboardService::paste_entry(const smk::core::ClipboardEntry& entry, smk::
         return false;
     }
     pending_entry_ = entry;
+    pending_input_generation_ = generation;
     pending_mode_ = smk::core::resolve_paste_mode(entry, requested);
     pending_plain_text_ = smk::core::paste_plain_text(
         entry, clean_spreadsheet_plain_text_, clean_spreadsheet_line_breaks_);
@@ -360,17 +349,35 @@ bool ClipboardService::clipboard_already_has_plain_text(const smk::core::Clipboa
 
 bool ClipboardService::attempt_pending_paste() {
     if (!pending_entry_) { KillTimer(window_, kRetryTimer); return false; }
+    const auto input_generation = pending_input_generation_;
+    const auto entry = *pending_entry_; // OLE（对象链接与嵌入）调用可能泵消息，不能持有待取消草稿的引用。
+    const auto mode = pending_mode_;
+    const auto plain_text = pending_plain_text_;
+    if (!keyboard_input().accepts(input_generation)) {
+        fail_pending_paste(L"input_cancelled", ERROR_CANCELLED);
+        return false;
+    }
     if (!paste_target_ || !IsWindow(paste_target_) || GetForegroundWindow() != paste_target_) {
         fail_pending_paste(L"target_changed", ERROR_INVALID_WINDOW_HANDLE);
         return false;
     }
     const bool requires_formatted = smk::core::requires_formatted_clipboard_payload(
-        *pending_entry_, pending_mode_);
-    bool written = !requires_formatted && clipboard_already_has_plain_text(*pending_entry_);
+        entry, mode);
+    bool written = !requires_formatted && clipboard_already_has_plain_text(entry);
+    if (!keyboard_input().accepts(input_generation) || !pending_entry_
+        || pending_input_generation_ != input_generation) {
+        cancel_pending_paste();
+        return false;
+    }
     if (!written) {
         if (!original_clipboard_) {
             IDataObject* original = nullptr;
             const HRESULT original_result = OleGetClipboard(&original);
+            if (!keyboard_input().accepts(input_generation) || !pending_entry_) {
+                if (original) original->Release();
+                cancel_pending_paste();
+                return false;
+            }
             if (FAILED(original_result) || !original) {
                 if (GetTickCount64() - pending_started_ >= kRetryTimeoutMs) {
                     fail_pending_paste(L"capture_original", static_cast<DWORD>(original_result));
@@ -382,7 +389,8 @@ bool ClipboardService::attempt_pending_paste() {
             }
             original_clipboard_.Attach(original);
         }
-        auto data = create_clipboard_data_object(*pending_entry_, pending_mode_, pending_plain_text_);
+        auto data = create_clipboard_data_object(entry, mode, plain_text);
+        if (!keyboard_input().accepts(input_generation)) { cancel_pending_paste(); return false; }
         const HRESULT result = data ? OleSetClipboard(data.Get()) : E_OUTOFMEMORY;
         if (data && SUCCEEDED(result)) {
             owned_clipboard_ = std::move(data);
@@ -392,6 +400,7 @@ bool ClipboardService::attempt_pending_paste() {
         else SMK_DIAGNOSTIC_EVENT("clipboard.paste_retry", std::format(L"elapsed={} hr=0x{:08X}",
             GetTickCount64() - pending_started_, static_cast<unsigned>(result)));
     }
+    if (!keyboard_input().accepts(input_generation)) { cancel_pending_paste(); return false; }
     if (written) {
         suppress_capture_until_ = GetTickCount64() + 300;
         pending_entry_.reset(); KillTimer(window_, kRetryTimer);
@@ -411,13 +420,18 @@ bool ClipboardService::attempt_pending_paste() {
 }
 
 void ClipboardService::restore_original_clipboard() noexcept {
-    if (clipboard_replaced_ && original_clipboard_) {
-        [[maybe_unused]] const HRESULT result = OleSetClipboard(original_clipboard_.Get());
+    const bool replaced = std::exchange(clipboard_replaced_, false);
+    auto original = std::move(original_clipboard_);
+    if (replaced && original && owned_clipboard_ && OleIsCurrentClipboard(owned_clipboard_.Get()) == S_OK) {
+        [[maybe_unused]] const HRESULT result = OleSetClipboard(original.Get());
         SMK_DIAGNOSTIC_EVENT("clipboard.paste_restore", std::format(
             L"result=0x{:08X}", static_cast<unsigned>(result)));
     }
-    clipboard_replaced_ = false;
-    original_clipboard_.Reset();
+}
+
+void ClipboardService::cancel_pending_paste() {
+    if (pending_entry_ || paste_target_ || clipboard_replaced_)
+        fail_pending_paste(L"input_cancelled", ERROR_CANCELLED);
 }
 
 void ClipboardService::fail_pending_paste(std::wstring_view stage, DWORD error) noexcept {
@@ -425,10 +439,10 @@ void ClipboardService::fail_pending_paste(std::wstring_view stage, DWORD error) 
         KillTimer(window_, kRetryTimer);
         KillTimer(window_, kSendPasteTimer);
     }
-    restore_original_clipboard();
     pending_entry_.reset();
     pending_plain_text_.clear();
     paste_target_ = nullptr;
+    restore_original_clipboard();
     (void)stage;
     (void)error;
     SMK_DIAGNOSTIC_EVENT("clipboard.paste_failed", std::format(

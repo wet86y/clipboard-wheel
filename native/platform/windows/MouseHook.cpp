@@ -17,7 +17,7 @@ constexpr std::array<std::uint64_t, 4> kRetryDelays{1000, 5000, 30'000, 30'000};
 
 std::size_t event_index(MouseHookEvent event) noexcept {
     const auto value = static_cast<std::size_t>(event);
-    return value > 0 && value <= 6 ? value - 1 : 0;
+    return value > 0 && value <= 7 ? value - 1 : 0;
 }
 
 DWORD process_integrity_rid(HANDLE process) noexcept {
@@ -130,6 +130,7 @@ MouseInputSafetyState::Decision MouseInputSafetyState::handle(
 
     switch (message) {
     case WM_MBUTTONDOWN:
+        late_middle_up_ = false; // 新的物理按下说明旧松开已发生，即使旧事件未送达也不能吞本次松开。
         if (!capture_ready() || !dispatch_succeeded) return {};
         ++generation_;
         wheel_active_ = true;
@@ -155,6 +156,7 @@ MouseInputSafetyState::Decision MouseInputSafetyState::handle(
             return {.suppress = true, .dispatch = dispatch,
                 .event = MouseHookEvent::middle_up, .generation = generation_};
         }
+        if (late_middle_up_) { late_middle_up_ = false; return {.suppress = true}; }
         break;
     case WM_MOUSEWHEEL:
     case WM_MOUSEHWHEEL:
@@ -263,6 +265,19 @@ MouseInputSafetyState::Decision MouseInputSafetyState::emergency_release() noexc
     button_up_samples_ = 0;
     buttons_.reset();
     return {.dispatch = dispatch, .event = MouseHookEvent::cancel, .generation = generation_};
+}
+
+MouseInputSafetyState::Decision MouseInputSafetyState::emergency_pause() noexcept {
+    enabled_ = false;
+    wheel_active_ = false;
+    late_middle_up_ = late_middle_up_ || middle_down_suppressed_;
+    middle_down_suppressed_ = false;
+    physical_up_samples_ = 0;
+    physical_down_observed_ = false;
+    button_up_samples_ = 0;
+    buttons_.confirm_physical_release();
+    ++generation_; // 即使轮盘已收到松开，也必须作废仍排在 UI（界面）队列中的动作。
+    return {.dispatch = true, .event = MouseHookEvent::emergency_pause, .generation = generation_};
 }
 
 MouseInputSafetyState::Decision MouseInputSafetyState::cancel_active() noexcept {
@@ -408,7 +423,7 @@ DWORD MouseHook::thread_main() noexcept {
             case kStopMessage: running = false; break;
             case WM_QUIT: running = false; break;
             case kStateChangedMessage:
-                if (!message.wParam) {
+                if (!desired_enabled_.load(std::memory_order_acquire) || keyboard_input().paused()) {
                     const auto cancel = state_.suspend();
                     if (cancel.dispatch) post_event(cancel.event, cancel.generation, {});
                     state_.set_enabled(false);
@@ -456,6 +471,7 @@ DWORD MouseHook::thread_main() noexcept {
     }
     state_.set_enabled(false);
     uninstall_hook();
+    keyboard_input().retry_releases();
     active_ = nullptr;
     SetEvent(stopped_event_);
     return 0;
@@ -486,6 +502,7 @@ LRESULT CALLBACK MouseHook::keyboard_hook_proc(int code, WPARAM wparam, LPARAM l
 LRESULT MouseHook::process_hook_event(int code, WPARAM wparam,
     const MSLLHOOKSTRUCT& event) {
     if (code < 0) return CallNextHookEx(nullptr, code, wparam, reinterpret_cast<LPARAM>(&event));
+    apply_keyboard_reset();
     const bool access_sensitive = wparam == WM_MBUTTONDOWN ||
         (state_.wheel_active() && (wparam == WM_LBUTTONDOWN || wparam == WM_RBUTTONDOWN));
     if (access_sensitive && query_input_access() != InputAccess::accessible) {
@@ -508,21 +525,11 @@ LRESULT MouseHook::process_hook_event(int code, WPARAM wparam,
 
 LRESULT MouseHook::process_keyboard_event(int code, WPARAM wparam,
     const KBDLLHOOKSTRUCT& event) noexcept {
-    if (code < 0 || event.vkCode != VK_ESCAPE)
-        return CallNextHookEx(nullptr, code, wparam, reinterpret_cast<LPARAM>(&event));
-    const bool down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
-    const bool up = wparam == WM_KEYUP || wparam == WM_SYSKEYUP;
-    if (down && (state_.wheel_active() || escape_down_suppressed_)) {
-        escape_down_suppressed_ = true;
-        const auto cancel = state_.emergency_release();
-        publish_state();
-        if (cancel.dispatch) (void)post_event(cancel.event, cancel.generation, {});
-        return 1;
+    if (code >= 0) {
+        keyboard_input().observe_key(wparam, event.vkCode, event.flags);
+        apply_keyboard_reset();
     }
-    if (up && escape_down_suppressed_) {
-        escape_down_suppressed_ = false;
-        return 1;
-    }
+    // 急停只暂停本程序，保留 Esc/Win（取消键/Windows 键）在其他程序中的原有行为。
     return CallNextHookEx(nullptr, code, wparam, reinterpret_cast<LPARAM>(&event));
 }
 
@@ -540,6 +547,8 @@ bool MouseHook::install_hook() noexcept {
     available_.store(success, std::memory_order_release);
     state_.note_hook_available(success);
     if (success) {
+        // 先装钩子再采样，覆盖安装前已按住的键；安装后的新按下会由钩子补齐。
+        keyboard_input().seed_physical_modifiers();
         retry_index_ = 0;
         next_retry_tick_ = 0;
         SMK_STARTUP_TRACE(L"mouse hook installed on dedicated thread");
@@ -567,7 +576,6 @@ void MouseHook::uninstall_hook() noexcept {
     if (keyboard_hook_) (void)UnhookWindowsHookEx(keyboard_hook_);
     hook_ = nullptr;
     keyboard_hook_ = nullptr;
-    escape_down_suppressed_ = false;
     available_.store(false, std::memory_order_release);
     state_.note_hook_available(false);
     publish_state();
@@ -580,6 +588,18 @@ void MouseHook::schedule_retry(std::uint64_t now) noexcept {
 }
 
 void MouseHook::run_watchdog(std::uint64_t now) noexcept {
+    if (keyboard_input().take_safety_hook_refresh()) {
+        const HHOOK promoted = keyboard_hook_
+            ? SetWindowsHookExW(WH_KEYBOARD_LL, keyboard_hook_proc, GetModuleHandleW(nullptr), 0) : nullptr;
+        if (promoted) {
+            if (keyboard_hook_) (void)UnhookWindowsHookEx(keyboard_hook_);
+            keyboard_hook_ = promoted;
+        } else keyboard_input().request_safety_hook_refresh();
+    }
+    // 钩子被系统静默移除或 UI（界面）录制钩子阻塞时，提供独立于界面的备用观察点。
+    keyboard_input().poll_reset_keys();
+    apply_keyboard_reset();
+    keyboard_input().retry_releases();
     const auto heartbeat = heartbeat_tick_.load(std::memory_order_acquire);
     if (heartbeat) state_.note_heartbeat(heartbeat);
     const auto access = state_.wheel_active() || !state_.input_observable()
@@ -605,6 +625,16 @@ void MouseHook::run_watchdog(std::uint64_t now) noexcept {
         SMK_DIAGNOSTIC_EVENT("input.capture.recovered", L"heartbeats=2 buttons=released");
     if (!hook_ && next_retry_tick_ && now >= next_retry_tick_) (void)install_hook();
     publish_state();
+}
+
+void MouseHook::apply_keyboard_reset() noexcept {
+    const auto input_generation = keyboard_input().generation();
+    if ((input_generation & 1) == 0 || observed_input_generation_ == input_generation) return;
+    observed_input_generation_ = input_generation;
+    desired_enabled_.store(false, std::memory_order_release);
+    const auto decision = state_.emergency_pause();
+    publish_state();
+    (void)post_event(decision.event, decision.generation, {});
 }
 
 MouseHook::InputAccess MouseHook::query_input_access() const noexcept {

@@ -40,12 +40,13 @@ private:
     void cancel_wheel_no_action();
     void toggle_selected_lock();
     void toggle_enabled();
+    void synchronize_input_pause(); // 将输入线程的急停锁存同步到窗口、托盘与配置。
     void show_settings();
     std::optional<smk::core::AppSettings> save_settings(const smk::core::AppSettings& settings);
     static std::wstring executable_path();
     static bool write_update_health_marker(const std::vector<std::wstring>& arguments);
     static int verify_release_bundle(HINSTANCE instance);
-    static void send_ctrl_c();
+    static void send_ctrl_c(smk::windows::InputGeneration generation);
 
     HINSTANCE instance_ = nullptr;
     HWND input_window_ = nullptr;
@@ -66,6 +67,8 @@ private:
     bool shutting_down_ = false;
     bool startup_exit_requested_ = false;
     bool hook_unavailable_notified_ = false;
+    smk::windows::InputGeneration wheel_input_generation_ = 0; // 当前轮盘会话的输入代次。
+    smk::windows::InputGeneration observed_pause_generation_ = 0; // 已完成界面清理的暂停代次。
 };
 
 } // namespace smk::app

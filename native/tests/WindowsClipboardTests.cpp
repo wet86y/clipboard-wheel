@@ -789,7 +789,7 @@ int main() {
     callbacks.clear_history = [&] { clear_history_called = true; };
     expect(tray.create(GetModuleHandleW(nullptr), std::move(callbacks)),
         "managed-style enabled tray icon is created");
-    HWND tray_window = FindWindowExW(HWND_MESSAGE, nullptr, L"SuperMiddleKeyNativeTrayHost", nullptr);
+    HWND tray_window = tray.window_handle();
     expect(tray_window != nullptr, "tray message window is available");
     if (tray_window) SendMessageW(tray_window, WM_COMMAND, 1003, 0);
     expect(clear_history_called, "tray clear-history command reaches the host callback");

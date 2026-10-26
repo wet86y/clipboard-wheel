@@ -2,6 +2,7 @@
 
 #include "core/Settings.h"
 #include "platform/windows/HotkeyCodec.h"
+#include "platform/windows/KeyboardInput.h"
 
 #include <windows.h>
 
@@ -50,7 +51,9 @@ public:
     ExtendedActionExecutor& operator=(const ExtendedActionExecutor&) = delete;
 
     bool start();
-    void enqueue(smk::core::ExtendedWheelActionSlot action);
+    void enqueue(smk::core::ExtendedWheelActionSlot action,
+        InputGeneration generation = keyboard_input().generation());
+    void cancel_pending(); // 取消尚未出队的动作；已经出队的动作仍须核对输入代次。
     bool shutdown(DWORD timeout_ms = 5000) noexcept;
 
 private:
@@ -59,7 +62,11 @@ private:
 
     std::mutex mutex_;
     std::condition_variable wake_;
-    std::deque<smk::core::ExtendedWheelActionSlot> queue_;
+    struct QueuedAction {
+        smk::core::ExtendedWheelActionSlot action;
+        InputGeneration generation = 0; // 动作发起时的输入代次。
+    };
+    std::deque<QueuedAction> queue_;
     std::thread worker_;
     HANDLE stopped_event_ = nullptr;
     std::unique_ptr<Implementation> implementation_;

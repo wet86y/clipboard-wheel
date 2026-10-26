@@ -73,6 +73,7 @@ add_library(super_middle_key_windows STATIC
     platform/windows/ExtendedActionExecutor.cpp
     platform/windows/HotkeyCaptureHook.cpp
     platform/windows/HotkeyCodec.cpp
+    platform/windows/KeyboardInput.cpp
     platform/windows/ImageClipboardPayload.cpp
     platform/windows/ManagedShortcutStore.cpp
     platform/windows/MouseHook.cpp
@@ -150,6 +151,12 @@ if(BUILD_TESTING)
     target_compile_options(super_middle_key_native_windows_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
     target_link_libraries(super_middle_key_native_windows_tests PRIVATE super_middle_key_diagnostics super_middle_key_windows ole32 user32)
     add_test(NAME native_windows_clipboard COMMAND super_middle_key_native_windows_tests)
+
+    add_executable(super_middle_key_native_input_tests tests/InputSafetyTests.cpp)
+    target_compile_definitions(super_middle_key_native_input_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(super_middle_key_native_input_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
+    target_link_libraries(super_middle_key_native_input_tests PRIVATE super_middle_key_diagnostics super_middle_key_windows user32)
+    add_test(NAME native_input_safety COMMAND super_middle_key_native_input_tests)
 
     add_executable(super_middle_key_native_wheel_tests
         tests/WheelWindowTests.cpp

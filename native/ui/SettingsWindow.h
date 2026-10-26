@@ -25,6 +25,7 @@ namespace smk::ui {
 
 class SettingsWindow final {
 public:
+    void cancel_input_for_reset(); // 强制停止快捷键录制并刷新显示，不保存草稿。
     using SaveCallback = std::function<std::optional<smk::core::AppSettings>(const smk::core::AppSettings&)>;
 
     ~SettingsWindow();

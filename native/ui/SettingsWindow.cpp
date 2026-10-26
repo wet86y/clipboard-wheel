@@ -1,4 +1,5 @@
 #include "ui/SettingsWindow.h"
+#include "platform/windows/KeyboardInput.h"
 
 #include "core/WheelLayout.h"
 #include "core/WheelVisualGeometry.h"
@@ -647,6 +648,9 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
         info->ptMinTrackSize = {px(760, dpi_), px(640, dpi_)};
         return 0;
     }
+    case smk::windows::kEmergencyResetMessage:
+        cancel_input_for_reset();
+        return 0;
     case WM_CLOSE:
         cancel_hotkey_recording();
         discard_managed_shortcut_candidates();
@@ -1715,6 +1719,12 @@ void SettingsWindow::cancel_hotkey_recording() {
     (void)key_count;
 }
 
+void SettingsWindow::cancel_input_for_reset() {
+    const bool recording = hotkey_recorder_.recording() || hotkey_capture_.active();
+    cancel_hotkey_recording();
+    if (recording && slot_action_) update_slot_editor();
+}
+
 void SettingsWindow::finish_hotkey_recording() {
     if (!hotkey_recorder_.recording()) return;
     const auto key_count = hotkey_recorder_.keys().size();
@@ -1728,6 +1738,7 @@ void SettingsWindow::finish_hotkey_recording() {
 }
 
 void SettingsWindow::record_hotkey(WPARAM key, LPARAM key_data) {
+    if (smk::windows::is_emergency_reset_key(static_cast<UINT>(key))) return;
     if (hotkey_recorder_.add(static_cast<UINT>(key), key_data)) update_slot_editor();
 }
 

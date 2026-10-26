@@ -1,4 +1,5 @@
 #include "platform/windows/HotkeyCaptureHook.h"
+#include "platform/windows/KeyboardInput.h"
 
 namespace smk::windows {
 
@@ -11,6 +12,7 @@ HotkeyCaptureDecision HotkeyCaptureFilter::handle(
     const bool key_down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
     const bool key_up = message == WM_KEYUP || message == WM_SYSKEYUP;
     if (!key_down && !key_up) return {};
+    if ((flags & LLKHF_INJECTED) != 0 || is_emergency_reset_key(virtual_key)) return {};
 
     const bool in_range = virtual_key < suppressed_keys_.size();
     const bool pending_release = in_range && suppressed_keys_[virtual_key];
@@ -18,7 +20,8 @@ HotkeyCaptureDecision HotkeyCaptureFilter::handle(
 
     if (key_up) {
         if (in_range) suppressed_keys_[virtual_key] = false;
-        return {.suppress = target_foreground || pending_release};
+        // 录制前已经透传的按下，必须让对应松开继续透传，避免 Ctrl（控制键）残留。
+        return {.suppress = pending_release};
     }
 
     if (in_range && suppressed_keys_[virtual_key]) return {.suppress = true};
@@ -68,6 +71,7 @@ bool HotkeyCaptureHook::start(HWND target, UINT delivery_message, DWORD* error) 
         return false;
     }
     if (error) *error = ERROR_SUCCESS;
+    keyboard_input().request_safety_hook_refresh();
     return true;
 }
 
@@ -91,6 +95,10 @@ LRESULT CALLBACK HotkeyCaptureHook::hook_proc(int code, WPARAM wparam, LPARAM lp
         && GetAncestor(foreground, GA_ROOT) == target_root;
     const auto decision = active_hook_->filter_.handle(
         wparam, event->vkCode, event->scanCode, event->flags, target_foreground);
+    const auto previous_generation = keyboard_input().generation();
+    keyboard_input().observe_key(wparam, event->vkCode, event->flags, decision.suppress);
+    if (keyboard_input().generation() != previous_generation)
+        (void)PostMessageW(active_hook_->target_, kEmergencyResetMessage, 0, 0);
     if (decision.deliver && IsWindow(active_hook_->target_)) {
         (void)PostMessageW(active_hook_->target_, active_hook_->delivery_message_,
             decision.virtual_key, decision.key_data);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "platform/windows/KeyboardInput.h"
+
 #include <windows.h>
 
 #include <array>
@@ -42,6 +44,7 @@ enum class MouseHookEvent : std::uint32_t {
     right_down,
     cancel,
     availability_changed,
+    emergency_pause, // Esc/Win（取消键/Windows 键）强制复位并暂停捕获。
 };
 
 // The state machine is deliberately independent of HHOOK so failure paths can
@@ -68,6 +71,7 @@ public:
     void cancel(std::uint32_t generation) noexcept;
     [[nodiscard]] Decision dispatch_failed(WPARAM message) noexcept;
     [[nodiscard]] Decision emergency_release() noexcept;
+    [[nodiscard]] Decision emergency_pause() noexcept;
 
     [[nodiscard]] bool wheel_active() const noexcept { return wheel_active_; }
     [[nodiscard]] bool middle_down_suppressed() const noexcept { return middle_down_suppressed_; }
@@ -88,6 +92,7 @@ private:
     bool input_observable_ = true;
     bool wheel_active_ = false;
     bool middle_down_suppressed_ = false;
+    bool late_middle_up_ = false; // 急停后仅吞掉此前被拦截中键的迟到松开。
     std::uint32_t generation_ = 0;
     std::uint64_t last_heartbeat_tick_ = 0;
     std::uint64_t observed_heartbeat_tick_ = 0;
@@ -151,6 +156,7 @@ private:
     void uninstall_hook() noexcept;
     void schedule_retry(std::uint64_t now) noexcept;
     void run_watchdog(std::uint64_t now) noexcept;
+    void apply_keyboard_reset() noexcept;
     [[nodiscard]] InputAccess query_input_access() const noexcept;
     [[nodiscard]] PhysicalButtonState physical_middle_state(InputAccess access) const noexcept;
     [[nodiscard]] static const wchar_t* input_access_reason(InputAccess access) noexcept;
@@ -182,12 +188,12 @@ private:
     std::atomic_uint64_t posted_move_sequence_{0};
     std::atomic_bool move_pending_{false};
     std::atomic_bool fail_open_requested_{false};
-    std::array<std::atomic_long, 6> event_x_{};
-    std::array<std::atomic_long, 6> event_y_{};
+    std::array<std::atomic_long, 7> event_x_{};
+    std::array<std::atomic_long, 7> event_y_{};
     std::uint64_t next_retry_tick_ = 0;
     unsigned retry_index_ = 0;
     DWORD current_integrity_rid_ = 0;
-    bool escape_down_suppressed_ = false;
+    InputGeneration observed_input_generation_ = 0; // 已应用到鼠标状态机的输入代次。
 };
 
 } // namespace smk::windows

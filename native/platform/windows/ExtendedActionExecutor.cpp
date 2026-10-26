@@ -370,7 +370,7 @@ std::optional<HWND> find_folder_window(const std::wstring& folder) {
     return std::nullopt;
 }
 
-bool activate_wps_tab(HWND host, const std::wstring& document) {
+bool activate_wps_tab(HWND host, const std::wstring& document, InputGeneration generation) {
     if (!host || document.empty()) return false;
     ComPtr<IUIAutomation> automation;
     if (FAILED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
@@ -387,6 +387,7 @@ bool activate_wps_tab(HWND host, const std::wstring& document) {
     const auto stem = lower(std::filesystem::path(document).stem().wstring());
     int length = 0; items->get_Length(&length);
     for (int index = 0; index < length; ++index) {
+        if (!keyboard_input().accepts(generation)) return false;
         ComPtr<IUIAutomationElement> item;
         if (FAILED(items->GetElement(index, item.GetAddressOf())) || !item) continue;
         BSTR raw = nullptr;
@@ -396,9 +397,15 @@ bool activate_wps_tab(HWND host, const std::wstring& document) {
         if (candidate != name && candidate != stem) continue;
         ComPtr<IUIAutomationSelectionItemPattern> selection;
         if (SUCCEEDED(item->GetCurrentPatternAs(UIA_SelectionItemPatternId,
-                IID_PPV_ARGS(selection.GetAddressOf()))) && selection && SUCCEEDED(selection->Select())) {
-            bring_to_front(host, true, true);
-            return true;
+                IID_PPV_ARGS(selection.GetAddressOf()))) && selection) {
+            auto permit = keyboard_input().try_dispatch(generation);
+            if (!permit) return false;
+            if (SUCCEEDED(selection->Select())) {
+                permit = {};
+                auto activate = keyboard_input().try_dispatch(generation);
+                if (activate) bring_to_front(host, true, true);
+                return true;
+            }
         }
     }
     return false;
@@ -514,29 +521,12 @@ int run_shell_timeout_self_test() {
 bool dispatch_extended_hotkey(
     const std::vector<WORD>& keys,
     const ExtendedKeyEventSender& sender) {
-    if (keys.empty() || !sender) return false;
-    std::vector<WORD> pressed;
-    bool success = true;
-    for (const WORD key : keys) {
-        if (!sender(key, false)) {
-            success = false;
-            break;
-        }
-        pressed.push_back(key);
-    }
-    for (auto it = pressed.rbegin(); it != pressed.rend(); ++it)
-        if (!sender(*it, true)) success = false;
-    return success;
+    KeyboardInput input(sender, [](WORD) { return false; });
+    return input.send_chord(keys, input.generation());
 }
 
 bool send_extended_hotkey(const std::vector<WORD>& keys) {
-    return dispatch_extended_hotkey(keys, [](WORD key, bool key_up) {
-        INPUT input{};
-        input.type = INPUT_KEYBOARD;
-        input.ki.wVk = key;
-        input.ki.dwFlags = key_up ? KEYEVENTF_KEYUP : 0;
-        return SendInput(1, &input, sizeof(input)) == 1;
-    });
+    return keyboard_input().send_chord(keys, keyboard_input().generation());
 }
 
 std::optional<std::wstring> normalize_browser_launch_url(std::wstring_view value) {
@@ -587,6 +577,10 @@ struct ExtendedActionExecutor::Implementation {
     explicit Implementation(const std::atomic_bool& stop_requested) : stop_requested(stop_requested) {}
 
     const std::atomic_bool& stop_requested;
+    InputGeneration input_generation = 0; // 当前动作对应的输入代次。
+    [[nodiscard]] bool action_allowed() const noexcept {
+        return !stop_requested.load(std::memory_order_relaxed) && keyboard_input().accepts(input_generation);
+    }
     struct Session {
         HANDLE process = nullptr;
         DWORD pid = 0;
@@ -644,7 +638,7 @@ struct ExtendedActionExecutor::Implementation {
     HWND wait_for_new_window(const std::wstring& executable, const std::set<HWND>& before) {
         const int attempts = profile_for(executable).wait_attempts;
         for (int attempt = 0; attempt < attempts; ++attempt) {
-            if (stop_requested.load(std::memory_order_relaxed)) return nullptr;
+            if (!action_allowed()) return nullptr;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             const auto current = visible_windows(executable);
             std::vector<HWND> added;
@@ -697,6 +691,8 @@ struct ExtendedActionExecutor::Implementation {
         });
         for (auto it = values.rbegin(); it != values.rend(); ++it) {
             if (const HWND window = session_window(*it)) {
+                auto permit = keyboard_input().try_dispatch(input_generation);
+                if (!permit || !action_allowed()) return true;
                 clear_launch_attempt(key);
                 if (!IsWindowVisible(window) || IsIconic(window)) bring_to_front(window);
                 else apply_second_trigger(window, behavior);
@@ -705,9 +701,12 @@ struct ExtendedActionExecutor::Implementation {
                 return true;
             }
             if (const HWND host = wps_host(*it)) {
+                auto permit = keyboard_input().try_dispatch(input_generation);
+                if (!permit || !action_allowed()) return true;
                 clear_launch_attempt(key);
                 bring_to_front(host, true, true);
-                (void)activate_wps_tab(host, it->document);
+                permit = {};
+                if (action_allowed()) (void)activate_wps_tab(host, it->document, input_generation);
                 SMK_DIAGNOSTIC_EVENT("extended.second_trigger", std::format(
                     L"pid={} behavior=activate source=wps_host", it->pid));
                 return true;
@@ -755,10 +754,16 @@ struct ExtendedActionExecutor::Implementation {
     void track(const std::wstring& key, StartedProcess started, const std::wstring& executable,
         std::set<HWND> before, const std::wstring& document) {
         HWND window = executable.empty() ? nullptr : wait_for_new_window(executable, before);
-        if (window) {
-            if (!bring_to_front(window)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(120));
-                (void)bring_to_front(window);
+        if (window && action_allowed()) {
+            auto permit = keyboard_input().try_dispatch(input_generation);
+            if (!permit) window = nullptr;
+            else {
+                if (!bring_to_front(window)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+                    permit = {};
+                    auto retry = keyboard_input().try_dispatch(input_generation);
+                    if (retry && action_allowed()) (void)bring_to_front(window);
+                }
             }
         }
         HWND host = nullptr;
@@ -780,10 +785,12 @@ struct ExtendedActionExecutor::Implementation {
     }
 
     void execute_shortcut(const smk::core::ExtendedWheelActionSlot& action) {
+        if (!action_allowed()) return;
         const auto started_at = Clock::now();
         SMK_DIAGNOSTIC_EVENT("extended.phase", std::format(
             L"slot={} phase=shortcut_resolve_begin", action.slot_index));
         const auto info = resolve_shortcut(action.shortcut_path);
+        if (!action_allowed()) return;
         SMK_DIAGNOSTIC_EVENT("extended.phase", std::format(
             L"slot={} phase=shortcut_resolve_end resolved={}", action.slot_index, info.has_value()));
         const auto key = tracking_key(action.shortcut_path, info, action.browser_launch_url);
@@ -793,6 +800,8 @@ struct ExtendedActionExecutor::Implementation {
                 SMK_DIAGNOSTIC_EVENT("extended.phase", std::format(
                     L"slot={} phase=folder_lookup_begin", action.slot_index));
                 if (const auto existing = find_folder_window(info->target_path)) {
+                    auto permit = keyboard_input().try_dispatch(input_generation);
+                    if (!permit || !action_allowed()) return;
                     SMK_DIAGNOSTIC_EVENT("extended.phase", std::format(
                         L"slot={} phase=folder_lookup_end found=true", action.slot_index));
                     apply_second_trigger(*existing, action.second_trigger_behavior);
@@ -802,9 +811,11 @@ struct ExtendedActionExecutor::Implementation {
                 SMK_DIAGNOSTIC_EVENT("extended.phase", std::format(
                     L"slot={} phase=folder_lookup_end found=false", action.slot_index));
                 sessions.erase(key);
-                if (!reserve_launch(key)) return;
+                if (!action_allowed() || !reserve_launch(key)) return;
                 SMK_DIAGNOSTIC_EVENT("extended.phase", std::format(
                     L"slot={} phase=folder_shell_begin", action.slot_index));
+                auto permit = keyboard_input().try_dispatch(input_generation);
+                if (!permit) { clear_launch_attempt(key); return; }
                 const auto started = isolated_folder_open(info->target_path);
                 SMK_DIAGNOSTIC_EVENT("extended.phase", std::format(
                     L"slot={} phase=folder_shell_end success={} helper_pid={} timeout={} dump_requested={} error={} elapsed_ms={}",
@@ -815,7 +826,7 @@ struct ExtendedActionExecutor::Implementation {
                 return;
             }
         }
-        if (handle_existing_session(key, action.second_trigger_behavior)) return;
+        if (!action_allowed() || handle_existing_session(key, action.second_trigger_behavior)) return;
         if (!reserve_launch(key)) {
             SMK_DIAGNOSTIC_EVENT("extended.launch_throttled", std::format(L"slot={}", action.slot_index));
             return;
@@ -823,7 +834,11 @@ struct ExtendedActionExecutor::Implementation {
         const auto executable = resolve_window_executable(info);
         const auto before = executable.empty() ? std::set<HWND>{} : visible_windows(executable);
         const auto document = info && !is_executable(info->target_path) ? info->target_path : L"";
+        if (!action_allowed()) { clear_launch_attempt(key); return; }
+        auto permit = keyboard_input().try_dispatch(input_generation);
+        if (!permit) { clear_launch_attempt(key); return; }
         auto started = start_target(action.shortcut_path, info, executable, action.browser_launch_url);
+        permit = {};
         if (!started.succeeded) {
             clear_launch_attempt(key);
             SMK_DIAGNOSTIC_EVENT("extended.launch_failed", std::format(
@@ -833,11 +848,12 @@ struct ExtendedActionExecutor::Implementation {
         track(key, std::move(started), executable, before, document);
     }
 
-    void execute(const smk::core::ExtendedWheelActionSlot& action) {
-        if (!action.configured()) return;
+    void execute(const smk::core::ExtendedWheelActionSlot& action, InputGeneration generation) {
+        input_generation = generation;
+        if (!action_allowed() || !action.configured()) return;
         if (_wcsicmp(action.mode.c_str(), L"hotkey") == 0) {
             const auto keys = parse_extended_hotkey(action.hotkey);
-            [[maybe_unused]] const bool sent = send_extended_hotkey(keys);
+            [[maybe_unused]] const bool sent = keyboard_input().send_chord(keys, generation);
             SMK_DIAGNOSTIC_EVENT("extended.hotkey", std::format(
                 L"slot={} key_count={} success={}", action.slot_index, keys.size(), sent));
             return;
@@ -868,18 +884,23 @@ bool ExtendedActionExecutor::start() {
     }
 }
 
-void ExtendedActionExecutor::enqueue(smk::core::ExtendedWheelActionSlot action) {
+void ExtendedActionExecutor::enqueue(smk::core::ExtendedWheelActionSlot action, InputGeneration generation) {
     std::size_t queue_depth = 0;
     [[maybe_unused]] const auto slot_index = action.slot_index;
     {
         std::scoped_lock lock(mutex_);
-        if (stopping_ || !worker_.joinable()) return;
-        queue_.push_back(std::move(action));
+        if (stopping_ || !worker_.joinable() || !keyboard_input().accepts(generation)) return;
+        queue_.push_back({std::move(action), generation});
         queue_depth = queue_.size();
     }
     SMK_DIAGNOSTIC_EVENT("extended.enqueue", std::format(
         L"slot={} queue_depth={}", slot_index, queue_depth));
     wake_.notify_one();
+}
+
+void ExtendedActionExecutor::cancel_pending() {
+    std::scoped_lock lock(mutex_);
+    queue_.clear();
 }
 
 bool ExtendedActionExecutor::shutdown(DWORD timeout_ms) noexcept {
@@ -902,18 +923,18 @@ void ExtendedActionExecutor::worker_main() {
         L"state=started apartment=STA com_hresult=0x{:08X}", static_cast<unsigned>(initialized)));
     implementation_ = std::make_unique<Implementation>(stop_requested_);
     for (;;) {
-        smk::core::ExtendedWheelActionSlot action;
+        QueuedAction pending;
         {
             std::unique_lock lock(mutex_);
             wake_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
             if (stopping_) break;
-            action = std::move(queue_.front());
+            pending = std::move(queue_.front());
             queue_.pop_front();
         }
-        SMK_DIAGNOSTIC_EVENT("extended.dequeue", std::format(L"slot={}", action.slot_index));
+        SMK_DIAGNOSTIC_EVENT("extended.dequeue", std::format(L"slot={}", pending.action.slot_index));
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        implementation_->execute(action);
-        SMK_DIAGNOSTIC_EVENT("extended.complete", std::format(L"slot={}", action.slot_index));
+        implementation_->execute(pending.action, pending.generation);
+        SMK_DIAGNOSTIC_EVENT("extended.complete", std::format(L"slot={}", pending.action.slot_index));
     }
     implementation_.reset();
     if (SUCCEEDED(initialized)) CoUninitialize();

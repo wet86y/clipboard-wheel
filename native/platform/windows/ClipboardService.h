@@ -2,6 +2,7 @@
 
 #include "core/ClipboardHistory.h"
 #include "core/PastePolicy.h"
+#include "platform/windows/KeyboardInput.h"
 
 #include <windows.h>
 #include <objidl.h>
@@ -90,7 +91,9 @@ public:
         clean_spreadsheet_line_breaks_ = enabled && remove_line_breaks;
     }
     bool capture_current();
-    bool paste_entry(const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode);
+    bool paste_entry(const smk::core::ClipboardEntry& entry, smk::core::PasteMode mode,
+        InputGeneration generation = keyboard_input().generation());
+    void cancel_pending_paste(); // 急停时取消两阶段粘贴，并按需恢复尚未粘贴的剪贴板。
     [[nodiscard]] static std::optional<smk::core::ClipboardEntry> create_entry_from_data_object(
         IDataObject* data, bool capture_images);
 
@@ -121,6 +124,7 @@ private:
     std::wstring pending_plain_text_;
     ULONGLONG pending_started_ = 0;
     HWND paste_target_ = nullptr;
+    InputGeneration pending_input_generation_ = 0; // 发起粘贴时的输入代次。
     bool clipboard_replaced_ = false;
     ULONGLONG suppress_capture_until_ = 0;
     ClipboardUpdateCoalescer capture_coalescer_;

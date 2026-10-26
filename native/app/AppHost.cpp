@@ -11,6 +11,7 @@
 #include "updater/UpdatePolicy.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -73,6 +74,7 @@ int AppHost::run(HINSTANCE instance, const std::vector<std::wstring>& arguments)
     MSG message{};
     BOOL get_message = FALSE;
     while ((get_message = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+        synchronize_input_pause();
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
@@ -113,6 +115,8 @@ bool AppHost::initialize(HINSTANCE instance, const std::vector<std::wstring>& ar
         L"process_elevated={} setting_enabled={} admin_restart={}",
         smk::windows::is_administrator(), settings_.run_as_administrator_enabled, takeover));
     enabled_ = settings_.mouse.middle_button_capture_enabled;
+    if (enabled_) smk::windows::keyboard_input().resume();
+    else smk::windows::keyboard_input().pause();
     if (!wheel_.create(instance)) {
         SMK_STARTUP_TRACE(L"wheel create failed HRESULT=" + std::to_wstring(static_cast<unsigned long>(wheel_.creation_error())));
         return false;
@@ -202,6 +206,8 @@ void AppHost::shutdown() {
     shutting_down_ = true;
     smk::windows::crash_set_phase(L"app_shutdown");
     SMK_STARTUP_TRACE(L"shutdown begin");
+    smk::windows::keyboard_input().pause();
+    smk::windows::keyboard_input().retry_releases();
     const ULONGLONG shutdown_deadline = GetTickCount64() + 5000;
     const auto remaining_shutdown_ms = [&]() -> DWORD {
         const ULONGLONG now = GetTickCount64();
@@ -289,9 +295,11 @@ LRESULT CALLBACK AppHost::input_window_proc(HWND window, UINT message, WPARAM wp
 }
 
 LRESULT AppHost::handle_input_message(UINT message, WPARAM wparam, LPARAM lparam) {
+    synchronize_input_pause();
     if (message == smk::windows::MouseHook::kEventMessage && mouse_hook_) {
         const auto event = static_cast<smk::windows::MouseHookEvent>(wparam);
         const auto generation = static_cast<std::uint32_t>(lparam);
+        if (event == smk::windows::MouseHookEvent::emergency_pause) return 0;
         if (event == smk::windows::MouseHookEvent::availability_changed) {
             const bool available = mouse_hook_->available();
             tray_.set_capture_available(available, !available && !hook_unavailable_notified_);
@@ -381,7 +389,9 @@ LRESULT AppHost::handle_input_message(UINT message, WPARAM wparam, LPARAM lparam
 }
 
 bool AppHost::show_wheel(POINT point) {
-    if (!enabled_) return false;
+    const auto input_generation = smk::windows::keyboard_input().generation();
+    if (!enabled_ || !smk::windows::keyboard_input().accepts(input_generation)) return false;
+    wheel_input_generation_ = input_generation;
     lock_changed_ = false;
     const auto capacity = static_cast<std::size_t>(settings_.wheel.sector_count - (settings_.wheel.quick_copy ? 1 : 0));
     const auto entries = history_.snapshot_for_wheel(capacity);
@@ -393,20 +403,22 @@ void AppHost::update_wheel(POINT point) { wheel_.update_pointer(point); }
 
 void AppHost::finish_wheel(POINT point) {
     if (!wheel_.visible()) return;
+    const auto input_generation = wheel_input_generation_;
+    if (!smk::windows::keyboard_input().accepts(input_generation)) { cancel_wheel_no_action(); return; }
     wheel_.update_pointer(point);
     const auto selection = wheel_.selection();
     wheel_.hide();
-    if (lock_changed_) return;
+    if (lock_changed_ || !smk::windows::keyboard_input().accepts(input_generation)) return;
     if (const auto* action = std::get_if<smk::core::ExtendedWheelActionSlot>(&selection)) {
         SMK_DIAGNOSTIC_EVENT("extended.selected", std::format(
             L"slot={} mode={} configured={}", action->slot_index, action->mode, action->configured()));
-        if (extended_actions_) extended_actions_->enqueue(*action);
+        if (extended_actions_) extended_actions_->enqueue(*action, input_generation);
         return;
     }
     const auto* entry = std::get_if<smk::core::ClipboardEntry>(&selection);
     if (!entry) return;
-    if (entry->is_quick_copy) send_ctrl_c();
-    else (void)clipboard_->paste_entry(*entry, smk::core::PasteMode::smart);
+    if (entry->is_quick_copy) send_ctrl_c(input_generation);
+    else (void)clipboard_->paste_entry(*entry, smk::core::PasteMode::smart, input_generation);
 }
 
 void AppHost::cancel_wheel_no_action() {
@@ -423,7 +435,13 @@ void AppHost::toggle_selected_lock() {
 }
 
 void AppHost::toggle_enabled() {
+    synchronize_input_pause();
     enabled_ = !enabled_;
+    if (enabled_) smk::windows::keyboard_input().resume();
+    else {
+        smk::windows::keyboard_input().pause();
+        synchronize_input_pause();
+    }
     settings_.mouse.middle_button_capture_enabled = enabled_;
     if (mouse_hook_) {
         mouse_hook_->set_enabled(enabled_);
@@ -434,11 +452,36 @@ void AppHost::toggle_enabled() {
     (void)settings_store_.save(settings_, ignored);
 }
 
+void AppHost::synchronize_input_pause() {
+    const auto input_generation = smk::windows::keyboard_input().generation();
+    if ((input_generation & 1) == 0 || observed_pause_generation_ == input_generation) return;
+    observed_pause_generation_ = input_generation;
+    const bool was_enabled = enabled_;
+    enabled_ = false;
+    settings_.mouse.middle_button_capture_enabled = false;
+    if (mouse_hook_) mouse_hook_->set_enabled(false);
+    cancel_wheel_no_action();
+    settings_window_.cancel_input_for_reset();
+    if (clipboard_) clipboard_->cancel_pending_paste();
+    if (extended_actions_) extended_actions_->cancel_pending();
+    tray_.set_enabled(false);
+    if (was_enabled) {
+        std::wstring error;
+        (void)settings_store_.save(settings_, error);
+    }
+    SMK_DIAGNOSTIC_EVENT("input.emergency_pause", std::format(
+        L"generation={} pending_releases={}", input_generation,
+        smk::windows::keyboard_input().pending_release_count()));
+}
+
 void AppHost::show_settings() { settings_window_.show(settings_); }
 
 std::optional<smk::core::AppSettings> AppHost::save_settings(const smk::core::AppSettings& settings) {
+    synchronize_input_pause();
     const auto previous = settings_;
     auto accepted = settings;
+    // 设置草稿可能在急停前打开，保存其他选项不得顺带重新激活中键捕获。
+    accepted.mouse.middle_button_capture_enabled = enabled_;
     smk::core::normalize_settings(accepted);
     std::wstring error;
     std::wstring warning;
@@ -501,17 +544,10 @@ std::wstring AppHost::executable_path() {
     return path;
 }
 
-void AppHost::send_ctrl_c() {
-    INPUT inputs[4]{};
-    inputs[0].type = INPUT_KEYBOARD;
-    inputs[0].ki.wVk = VK_CONTROL;
-    inputs[1].type = INPUT_KEYBOARD;
-    inputs[1].ki.wVk = 'C';
-    inputs[2] = inputs[1];
-    inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
-    inputs[3] = inputs[0];
-    inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
-    SendInput(4, inputs, sizeof(INPUT));
+void AppHost::send_ctrl_c(smk::windows::InputGeneration generation) {
+    constexpr std::array<WORD, 2> keys{VK_CONTROL, 'C'};
+    [[maybe_unused]] const bool sent = smk::windows::keyboard_input().send_chord(keys, generation);
+    SMK_DIAGNOSTIC_EVENT("input.quick_copy", std::format(L"generation={} success={}", generation, sent));
 }
 
 bool AppHost::write_update_health_marker(const std::vector<std::wstring>& arguments) {
