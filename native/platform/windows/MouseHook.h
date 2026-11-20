@@ -44,7 +44,7 @@ enum class MouseHookEvent : std::uint32_t {
     right_down,
     cancel,
     availability_changed,
-    emergency_pause, // Esc/Win（取消键/Windows 键）强制复位并暂停捕获。
+    emergency_pause, // 连按两次 Esc/Win（取消键/Windows 键）暂停捕获。
 };
 
 // The state machine is deliberately independent of HHOOK so failure paths can
@@ -149,9 +149,10 @@ private:
     static DWORD WINAPI thread_entry(void* context) noexcept;
     DWORD thread_main() noexcept;
     static LRESULT CALLBACK hook_proc(int code, WPARAM wparam, LPARAM lparam) noexcept;
-    static LRESULT CALLBACK keyboard_hook_proc(int code, WPARAM wparam, LPARAM lparam) noexcept;
+    static LRESULT CALLBACK raw_keyboard_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept;
     LRESULT process_hook_event(int code, WPARAM wparam, const MSLLHOOKSTRUCT& event);
-    LRESULT process_keyboard_event(int code, WPARAM wparam, const KBDLLHOOKSTRUCT& event) noexcept;
+    [[nodiscard]] bool install_keyboard_listener(HINSTANCE instance) noexcept;
+    void uninstall_keyboard_listener() noexcept;
     bool install_hook() noexcept;
     void uninstall_hook() noexcept;
     void schedule_retry(std::uint64_t now) noexcept;
@@ -176,7 +177,7 @@ private:
     HANDLE fail_open_event_ = nullptr;
     DWORD thread_id_ = 0;
     HHOOK hook_ = nullptr;
-    HHOOK keyboard_hook_ = nullptr;
+    HWND raw_keyboard_window_ = nullptr;
     MouseInputSafetyState state_;
     std::atomic_bool desired_enabled_{true};
     std::atomic_bool available_{false};

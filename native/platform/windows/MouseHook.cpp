@@ -4,6 +4,8 @@
 #include "platform/windows/CrashHandler.h"
 #include "platform/windows/StartupTrace.h"
 
+#include <hidusage.h>
+
 #include <algorithm>
 #include <cstddef>
 
@@ -14,6 +16,7 @@ constexpr std::uint64_t kPhysicalReleaseMinimumMs = 100;
 constexpr std::uint64_t kWheelFailSafeMs = 15'000;
 constexpr DWORD kWatchdogIntervalMs = 50;
 constexpr std::array<std::uint64_t, 4> kRetryDelays{1000, 5000, 30'000, 30'000};
+constexpr wchar_t kRawKeyboardWindowClass[] = L"SuperMiddleKeyRawKeyboard";
 
 std::size_t event_index(MouseHookEvent event) noexcept {
     const auto value = static_cast<std::size_t>(event);
@@ -436,6 +439,7 @@ DWORD MouseHook::thread_main() noexcept {
             case kSuspendMessage: {
                 const auto cancel = state_.suspend();
                 if (cancel.dispatch) post_event(cancel.event, cancel.generation, {});
+                next_retry_tick_ = 0;
                 uninstall_hook();
                 publish_state();
                 break;
@@ -488,15 +492,20 @@ LRESULT CALLBACK MouseHook::hook_proc(int code, WPARAM wparam, LPARAM lparam) no
     }
 }
 
-LRESULT CALLBACK MouseHook::keyboard_hook_proc(int code, WPARAM wparam, LPARAM lparam) noexcept {
-    if (code < 0 || !active_) return CallNextHookEx(nullptr, code, wparam, lparam);
-    try {
-        return active_->process_keyboard_event(code, wparam,
-            *reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam));
-    } catch (...) {
-        active_->fail_open();
-        return CallNextHookEx(nullptr, code, wparam, lparam);
+LRESULT CALLBACK MouseHook::raw_keyboard_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
+    if (message == WM_INPUT && active_) {
+        RAWINPUT input{};
+        UINT size = sizeof(input);
+        const UINT bytes = GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT,
+            &input, &size, sizeof(RAWINPUTHEADER));
+        if (bytes != static_cast<UINT>(-1) && bytes >= sizeof(RAWINPUTHEADER) + sizeof(RAWKEYBOARD)) {
+            keyboard_input().observe_raw_key(input, static_cast<DWORD>(GetMessageTime()));
+            active_->apply_keyboard_reset();
+        }
+    } else if (message == WM_INPUT_DEVICE_CHANGE && wparam == GIDC_REMOVAL) {
+        keyboard_input().reset_physical_keys();
     }
+    return DefWindowProcW(window, message, wparam, lparam);
 }
 
 LRESULT MouseHook::process_hook_event(int code, WPARAM wparam,
@@ -523,38 +532,53 @@ LRESULT MouseHook::process_hook_event(int code, WPARAM wparam,
         reinterpret_cast<LPARAM>(&event));
 }
 
-LRESULT MouseHook::process_keyboard_event(int code, WPARAM wparam,
-    const KBDLLHOOKSTRUCT& event) noexcept {
-    if (code >= 0) {
-        keyboard_input().observe_key(wparam, event.vkCode, event.flags);
-        apply_keyboard_reset();
+bool MouseHook::install_keyboard_listener(HINSTANCE instance) noexcept {
+    WNDCLASSW window_class{};
+    window_class.lpfnWndProc = raw_keyboard_window_proc;
+    window_class.hInstance = instance;
+    window_class.lpszClassName = kRawKeyboardWindowClass;
+    if (!RegisterClassW(&window_class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+
+    const HWND window = CreateWindowExW(0, kRawKeyboardWindowClass, L"", 0,
+        0, 0, 0, 0, HWND_MESSAGE, nullptr, instance, nullptr);
+    if (!window) return false;
+    const RAWINPUTDEVICE keyboard{HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYBOARD,
+        RIDEV_INPUTSINK | RIDEV_DEVNOTIFY, window};
+    if (!RegisterRawInputDevices(&keyboard, 1, sizeof(keyboard))) {
+        const DWORD error = GetLastError();
+        DestroyWindow(window);
+        SetLastError(error);
+        return false;
     }
-    // 急停只暂停本程序，保留 Esc/Win（取消键/Windows 键）在其他程序中的原有行为。
-    return CallNextHookEx(nullptr, code, wparam, reinterpret_cast<LPARAM>(&event));
+    raw_keyboard_window_ = window;
+    keyboard_input().reset_physical_keys();
+    return true;
+}
+
+void MouseHook::uninstall_keyboard_listener() noexcept {
+    if (!raw_keyboard_window_) return;
+    const RAWINPUTDEVICE keyboard{HID_USAGE_PAGE_GENERIC, HID_USAGE_GENERIC_KEYBOARD, RIDEV_REMOVE, nullptr};
+    (void)RegisterRawInputDevices(&keyboard, 1, sizeof(keyboard));
+    DestroyWindow(raw_keyboard_window_);
+    raw_keyboard_window_ = nullptr;
 }
 
 bool MouseHook::install_hook() noexcept {
-    if (hook_ && keyboard_hook_) return true;
-    hook_ = SetWindowsHookExW(WH_MOUSE_LL, hook_proc, GetModuleHandleW(nullptr), 0);
-    keyboard_hook_ = SetWindowsHookExW(WH_KEYBOARD_LL, keyboard_hook_proc, GetModuleHandleW(nullptr), 0);
-    const bool success = hook_ != nullptr && keyboard_hook_ != nullptr;
-    if (!success) {
-        if (hook_) UnhookWindowsHookEx(hook_);
-        if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
-        hook_ = nullptr;
-        keyboard_hook_ = nullptr;
-    }
+    if (hook_) return true;
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    if (install_keyboard_listener(instance))
+        hook_ = SetWindowsHookExW(WH_MOUSE_LL, hook_proc, instance, 0);
+    const bool success = hook_ != nullptr;
+    const DWORD error = success ? ERROR_SUCCESS : GetLastError();
     available_.store(success, std::memory_order_release);
     state_.note_hook_available(success);
     if (success) {
-        // 先装钩子再采样，覆盖安装前已按住的键；安装后的新按下会由钩子补齐。
-        keyboard_input().seed_physical_modifiers();
         retry_index_ = 0;
         next_retry_tick_ = 0;
         SMK_STARTUP_TRACE(L"mouse hook installed on dedicated thread");
         SMK_DIAGNOSTIC_EVENT("input.hook.install", L"success=true");
     } else {
-        const DWORD error = GetLastError();
+        uninstall_keyboard_listener();
         schedule_retry(GetTickCount64());
         wchar_t details[96]{};
         swprintf_s(details, L"success=false error=%lu", error);
@@ -573,9 +597,8 @@ void MouseHook::uninstall_hook() noexcept {
         swprintf_s(details, L"success=%u error=%lu", result != FALSE ? 1u : 0u, error);
         SMK_DIAGNOSTIC_EVENT("input.hook.uninstall", details);
     }
-    if (keyboard_hook_) (void)UnhookWindowsHookEx(keyboard_hook_);
+    uninstall_keyboard_listener();
     hook_ = nullptr;
-    keyboard_hook_ = nullptr;
     available_.store(false, std::memory_order_release);
     state_.note_hook_available(false);
     publish_state();
@@ -588,16 +611,6 @@ void MouseHook::schedule_retry(std::uint64_t now) noexcept {
 }
 
 void MouseHook::run_watchdog(std::uint64_t now) noexcept {
-    if (keyboard_input().take_safety_hook_refresh()) {
-        const HHOOK promoted = keyboard_hook_
-            ? SetWindowsHookExW(WH_KEYBOARD_LL, keyboard_hook_proc, GetModuleHandleW(nullptr), 0) : nullptr;
-        if (promoted) {
-            if (keyboard_hook_) (void)UnhookWindowsHookEx(keyboard_hook_);
-            keyboard_hook_ = promoted;
-        } else keyboard_input().request_safety_hook_refresh();
-    }
-    // 钩子被系统静默移除或 UI（界面）录制钩子阻塞时，提供独立于界面的备用观察点。
-    keyboard_input().poll_reset_keys();
     apply_keyboard_reset();
     keyboard_input().retry_releases();
     const auto heartbeat = heartbeat_tick_.load(std::memory_order_acquire);

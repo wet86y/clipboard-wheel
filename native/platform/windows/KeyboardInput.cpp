@@ -2,16 +2,28 @@
 
 #include "platform/windows/DiagnosticLog.h"
 
+#include <ntddkbd.h>
+
+#include <algorithm>
 #include <utility>
 
 namespace smk::windows {
 namespace {
-constexpr std::array<WORD, 3> kResetKeys{VK_ESCAPE, VK_LWIN, VK_RWIN};
+constexpr DWORD kResetDoubleTapMs = 500;
 constexpr std::array<WORD, 8> kModifierKeys{
     VK_LCONTROL, VK_RCONTROL, VK_LSHIFT, VK_RSHIFT, VK_LMENU, VK_RMENU, VK_LWIN, VK_RWIN};
 constexpr ULONG_PTR kInputMarker = 0x534D4B49; // SMKI：本程序的模拟键盘输入标记。
 constexpr InputGeneration kActiveDispatch = InputGeneration{1} << 48;
 constexpr InputGeneration kGenerationMask = kActiveDispatch - 1;
+
+UINT physical_virtual_key(const RAWKEYBOARD& key) noexcept {
+    switch (key.VKey) {
+    case VK_SHIFT: return MapVirtualKeyW(key.MakeCode, MAPVK_VSC_TO_VK_EX);
+    case VK_CONTROL: return (key.Flags & RI_KEY_E0) ? VK_RCONTROL : VK_LCONTROL;
+    case VK_MENU: return (key.Flags & RI_KEY_E0) ? VK_RMENU : VK_LMENU;
+    default: return key.VKey;
+    }
+}
 
 bool native_send(WORD key, bool key_up) noexcept {
     INPUT input{};
@@ -77,12 +89,14 @@ void KeyboardInput::pause() noexcept {
     generation_.fetch_or(1, std::memory_order_acq_rel);
 }
 
-void KeyboardInput::emergency_reset() noexcept {
+void KeyboardInput::emergency_reset(InputGeneration expected) noexcept {
+    if ((expected & 1) != 0) return;
     auto previous = generation_.load(std::memory_order_acquire);
-    while (!generation_.compare_exchange_weak(previous,
-        (previous & ~kGenerationMask) | (((previous + 2) | 1) & kGenerationMask),
-        std::memory_order_acq_rel, std::memory_order_acquire)) {}
-    force_release_modifiers_.store(true, std::memory_order_release);
+    while ((previous & kGenerationMask) == expected) {
+        const auto paused = (previous & ~kGenerationMask) | (((expected + 2) | 1) & kGenerationMask);
+        if (generation_.compare_exchange_weak(previous, paused,
+            std::memory_order_acq_rel, std::memory_order_acquire)) return;
+    }
 }
 
 void KeyboardInput::resume() noexcept {
@@ -92,38 +106,60 @@ void KeyboardInput::resume() noexcept {
         std::memory_order_acq_rel, std::memory_order_acquire)) {}
 }
 
-void KeyboardInput::observe_key(WPARAM message, UINT key, DWORD flags, bool suppressed) noexcept {
-    if (key >= physical_down_.size()) return;
-    const bool down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
-    const bool up = message == WM_KEYUP || message == WM_SYSKEYUP;
-    if (!down && !up) return;
-    if ((flags & LLKHF_INJECTED) != 0) {
-        injected_down_[key].store(down, std::memory_order_release);
+void KeyboardInput::observe_raw_key(const RAWINPUT& input, DWORD message_time) noexcept {
+    if (input.header.dwType != RIM_TYPEKEYBOARD || !input.header.hDevice) return;
+    const auto& event = input.data.keyboard;
+    const UINT key = physical_virtual_key(event);
+    if (!key || key >= 0xff || event.MakeCode == KEYBOARD_OVERRUN_MAKE_CODE) return;
+
+    const bool down = (event.Flags & RI_KEY_BREAK) == 0;
+    const bool was_down = physical_down_[key].exchange(down, std::memory_order_acq_rel);
+    if (!down) physical_suppressed_[key].store(false, std::memory_order_release);
+
+    const auto input_generation = generation();
+    auto& gesture = reset_gesture_;
+    if ((input_generation & 1) != 0 || !is_emergency_reset_key(key)) {
+        gesture = {};
         return;
     }
-    physical_suppressed_[key].store(down && suppressed, std::memory_order_release);
-    const bool previous = physical_down_[key].exchange(down, std::memory_order_acq_rel);
-    if (down && !previous && is_emergency_reset_key(key)) emergency_reset();
+    const bool matches = gesture.key == key && gesture.device == input.header.hDevice
+        && gesture.generation == input_generation && message_time - gesture.first_down_time <= kResetDoubleTapMs;
+    if (down) {
+        const bool modifier_held = std::any_of(kModifierKeys.begin(), kModifierKeys.end(), [&](WORD modifier) {
+            return modifier != key && physical_down_[modifier].load(std::memory_order_acquire);
+        });
+        if (was_down || modifier_held) gesture = {};
+        else if (!matches) gesture = {input_generation, input.header.hDevice, key, message_time};
+    } else if (!was_down || !matches) {
+        gesture = {};
+    } else if (gesture.first_tap_completed) {
+        gesture = {};
+        emergency_reset(input_generation);
+    } else {
+        gesture.first_tap_completed = true;
+    }
 }
 
-void KeyboardInput::seed_physical_modifiers() noexcept {
-    for (const WORD key : kModifierKeys) {
+void KeyboardInput::observe_suppressed_key(UINT key, bool down) noexcept {
+    if (key >= physical_suppressed_.size()) return;
+    if (!down) physical_down_[key].store(false, std::memory_order_release);
+    physical_suppressed_[key].store(down, std::memory_order_release);
+}
+
+void KeyboardInput::reset_physical_keys() noexcept {
+    reset_gesture_ = {};
+    for (WORD key = 1; key < physical_down_.size(); ++key) {
         const WORD generic = key == VK_LCONTROL || key == VK_RCONTROL ? VK_CONTROL
             : key == VK_LSHIFT || key == VK_RSHIFT ? VK_SHIFT
             : key == VK_LMENU || key == VK_RMENU ? VK_MENU : key;
-        if (pending_[key].load(std::memory_order_acquire) || pending_[generic].load(std::memory_order_acquire)) continue;
-        physical_down_[key].store(query_down(key), std::memory_order_release);
+        if (pending_[key].load(std::memory_order_acquire) || pending_[generic].load(std::memory_order_acquire)) {
+            continue;
+        }
+        // 只给修饰键和急停键建立初始状态，已按住的急停键必须先松开。
+        const bool needs_initial_state = key == VK_ESCAPE ||
+            std::find(kModifierKeys.begin(), kModifierKeys.end(), key) != kModifierKeys.end();
+        physical_down_[key].store(needs_initial_state && query_down(key), std::memory_order_release);
         physical_suppressed_[key].store(false, std::memory_order_release);
-    }
-}
-
-void KeyboardInput::poll_reset_keys() noexcept {
-    for (const WORD key : kResetKeys) {
-        if (pending_[key].load(std::memory_order_acquire)
-            || injected_down_[key].load(std::memory_order_acquire)) continue;
-        const bool down = query_down(key);
-        const bool previous = physical_down_[key].exchange(down, std::memory_order_acq_rel);
-        if (down && !previous) emergency_reset();
     }
 }
 
@@ -159,12 +195,6 @@ bool KeyboardInput::release_key(WORD key) noexcept {
 }
 
 bool KeyboardInput::release_pending() noexcept {
-    if (force_release_modifiers_.exchange(false, std::memory_order_acq_rel)) {
-        for (const WORD key : kModifierKeys) {
-            if (!physically_held(key) && query_down(key))
-                pending_[key].store(true, std::memory_order_release);
-        }
-    }
     bool released = true;
     for (std::size_t key = pending_.size(); key-- != 0;) {
         if (pending_[key].load(std::memory_order_acquire))

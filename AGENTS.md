@@ -37,6 +37,8 @@
 
 ## Generated files and documentation
 
+- 根目录 `README.md` 是 GitHub 项目主页。只有用户明确允许时才可主动修改，常规文档更新、发布和版本号调整均不包含此权限。
+- 同步远端时通过 Git 合并保留远端 `README.md` 的内容。若存在需要改写主页内容的冲突，先请用户确认处理方式。
 - 不直接编辑或提交 `build/`、`artifacts/` 中的生成物，除非任务明确要求处理发布资产。
 - 改变构建输出或路径约定时，同步更新 `docs/BUILD_OUTPUT_CONTRACT.md`。
 - 改变 updater 集成或仓库边界时，同步更新 `docs/SHARED_UPDATE_ARCHITECTURE.md`。

@@ -71,7 +71,6 @@ bool HotkeyCaptureHook::start(HWND target, UINT delivery_message, DWORD* error) 
         return false;
     }
     if (error) *error = ERROR_SUCCESS;
-    keyboard_input().request_safety_hook_refresh();
     return true;
 }
 
@@ -95,10 +94,8 @@ LRESULT CALLBACK HotkeyCaptureHook::hook_proc(int code, WPARAM wparam, LPARAM lp
         && GetAncestor(foreground, GA_ROOT) == target_root;
     const auto decision = active_hook_->filter_.handle(
         wparam, event->vkCode, event->scanCode, event->flags, target_foreground);
-    const auto previous_generation = keyboard_input().generation();
-    keyboard_input().observe_key(wparam, event->vkCode, event->flags, decision.suppress);
-    if (keyboard_input().generation() != previous_generation)
-        (void)PostMessageW(active_hook_->target_, kEmergencyResetMessage, 0, 0);
+    if (decision.suppress) keyboard_input().observe_suppressed_key(
+        event->vkCode, wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN);
     if (decision.deliver && IsWindow(active_hook_->target_)) {
         (void)PostMessageW(active_hook_->target_, active_hook_->delivery_message_,
             decision.virtual_key, decision.key_data);

@@ -1,5 +1,4 @@
 #include "ui/SettingsWindow.h"
-#include "platform/windows/KeyboardInput.h"
 #include "platform/windows/ShortcutDropTarget.h"
 
 #include <windows.h>
@@ -787,7 +786,7 @@ int main() {
             SendMessageW(GetParent(slot_action), WM_COMMAND,
                 MAKEWPARAM(2035, BN_CLICKED), reinterpret_cast<LPARAM>(slot_action));
             SendMessageW(window, WM_KEYDOWN, VK_LCONTROL, 0);
-            SendMessageW(window, smk::windows::kEmergencyResetMessage, 0, 0);
+            settings.cancel_input_for_reset();
             wchar_t reset_action[64]{};
             GetWindowTextW(slot_action, reset_action, static_cast<int>(std::size(reset_action)));
             expect(std::wstring(reset_action) == L"录制", "emergency cleanup stops recording without committing the draft");

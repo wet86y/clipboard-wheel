@@ -648,9 +648,6 @@ LRESULT SettingsWindow::handle_message(UINT message, WPARAM wparam, LPARAM lpara
         info->ptMinTrackSize = {px(760, dpi_), px(640, dpi_)};
         return 0;
     }
-    case smk::windows::kEmergencyResetMessage:
-        cancel_input_for_reset();
-        return 0;
     case WM_CLOSE:
         cancel_hotkey_recording();
         discard_managed_shortcut_candidates();
